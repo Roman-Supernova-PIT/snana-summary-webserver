@@ -1,0 +1,3 @@
+[submodule "rkwebutil"]
+	path = rkwebutil
+	url = https://github.com/rknop/rkwebutil.git
