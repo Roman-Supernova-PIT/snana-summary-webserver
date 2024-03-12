@@ -2,7 +2,7 @@
 #   docker build -t snana-summary-webserver .
 #
 # run with
-#   docker run -d --name baltay-fom -p 8080:8080 snana-summary-webserver
+#   docker run -d --name snana-summary -p 8080:8080 snana-summary-webserver
 #
 # To bind-mount the source directory for testing purposes, after -d:
 #    --mount type=bind,source=$PWD,target=/code
@@ -29,17 +29,19 @@ RUN apk update \
 
 RUN rm /usr/lib/python3.11/EXTERNALLY-MANAGED
 
-RUN pip install gunicorn flask \
+RUN pip install gunicorn flask pyyaml numpy pandas \
     && rm -rf /.cache/pip
 
 RUN mkdir /code
 RUN mkdir /code/static
 RUN mkdir /code/templates
+RUN mkdir /code/lib
 WORKDIR /code
 COPY webservice.py webservice.py
 COPY static/*.js /code/static/
 COPY rkwebutil/rkwebutil.js /code/static/rkwebutil.js
 COPY templates/*.html /code/templates/
+COPY lib/parse_snana.py /code/lib/
 
 COPY data /data
 
