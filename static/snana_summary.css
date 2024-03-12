@@ -2,12 +2,14 @@
     --link-color: #000066;
     --link-decoration: underline;
     --main-color: black;
+    --background-color: #eeeeee;
     --half-faded-color: #888888;
     --some-faded-color: #666666;
     --lots-faded-color: #aaaaaa;
+    --most-faded-color: #dddddd;
 }
 
-body { background: #dddddd;
+body { background: var(--background-color);
        color: var(--main-color);
      }
 
@@ -16,3 +18,37 @@ body { background: #dddddd;
         text-decoration: var(--link-decoration);
         cursor:pointer;
       }
+
+.somefaded { background-color: var(--some-faded-color) }
+.halffaded { background-color: var(--half-faded-color) }
+.lotsfaded { background-color: var(--lots-faded-color) }
+.mostfaded { background-color: var(--most-faded-color) }
+
+table { border: 1px solid; }
+table tr { border: 1px solid black; padding-top: 1ex; padding-bottom: 1ex }
+table tr th { border-bottom: 1px solid black; padding-left: 1em; padding-right: 1em }
+table tr td { border-bottom: 1px solid black; padding-left: 1em; padding-right: 1em }
+table tr td { vertical-align: top }
+
+div.hbox { display: flex;
+           flex-direction: row; }
+div.hbox2emgap { display: flex;
+                 flex-direction: row;
+                 gap: 2em; }
+
+/* I am a terrible person for using pixel sizes.  But, I know the image will be 600x500 */
+
+div.byfom_hbox { display: flex;
+                 flex-direction: row;
+                 justify-content: center;
+                 align-items: flex-start; }
+div.byfom_tabdiv { flex-grow: 1;
+                   flex-shrink: 1; }
+div.byfom_infodiv { flex-grow: 0;
+                    width: 612px;
+                    border: 2px solid var(--some-faded-color);
+                    padding: 2px;
+                    margin: 2px;
+                  }
+
+                   

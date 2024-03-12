@@ -29,7 +29,7 @@ RUN apk update \
 
 RUN rm /usr/lib/python3.11/EXTERNALLY-MANAGED
 
-RUN pip install gunicorn flask pyyaml numpy pandas \
+RUN pip install gunicorn flask pyyaml numpy pandas matplotlib \
     && rm -rf /.cache/pip
 
 RUN mkdir /code

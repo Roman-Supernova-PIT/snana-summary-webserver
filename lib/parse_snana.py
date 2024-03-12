@@ -5,13 +5,12 @@ import yaml
 import numpy
 import pandas
 
-sys.stderr.write( "Kaglorky\n" )
-
 class RomanSurveySummary:
     known_filters = ['R', 'Z', 'Y', 'J', 'H', 'F', 'K']
 
-    def __init__( self, subdir, noread=False ):
-        self.subdir = pathlib.Path( subdir )
+    def __init__( self, indir, outdir, noread=False ):
+        self.indir = pathlib.Path( indir )
+        self.outdir = pathlib.Path( outdir )
         if not noread:
             self.read_files()
 
@@ -91,13 +90,13 @@ class RomanSurveySummary:
         if not regen:
             mustredo = False
             for attr in ( 'infodf', 'tierdf', 'obsdf', 'zhistdf', 'cosmodf' ):
-                if not ( self.subdir / f'{attr}.pkl' ).is_file():
-                    sys.stderr.write( f"Didn't find {self.subdir/attr}.pkl, regenerating\n" )
+                if not ( self.outdir / f'{attr}.pkl' ).is_file():
+                    sys.stderr.write( f"Didn't find {self.outdir/attr}.pkl, regenerating all pkls.\n" )
                     mustredo = True
                     break
             if not mustredo:
                 for attr in ( 'infodf', 'snrmaxdf', 'tierdf', 'obsdf', 'zhistdf', 'cosmodf' ):
-                    setattr( self, attr, pandas.read_pickle( self.subdir / f"{attr}.pkl" ) )
+                    setattr( self, attr, pandas.read_pickle( self.outdir / f"{attr}.pkl" ) )
                 return
 
         infodf = None
@@ -107,7 +106,7 @@ class RomanSurveySummary:
         zhistdf = None
         cosmodf = None
 
-        simlibs = self.subdir.glob( "*.SIMLIB" )
+        simlibs = self.indir.glob( "*.SIMLIB" )
         
         for simlib in simlibs:
             outdict, name = self.get_survey_info( simlib )
@@ -159,7 +158,7 @@ class RomanSurveySummary:
             curtierdf.set_index( [ 'NAME', 'TIER' ], inplace=True )
                     
             for mu in [ 0, 1 ]:
-                fname = [ i for i in ( self.subdir / "DATA_FILES" ).glob( f"*{name}/FITOPT000_MUOPT{mu:03d}.FITRES" ) ]
+                fname = [ i for i in ( self.indir / "DATA_FILES" ).glob( f"*{name}/FITOPT000_MUOPT{mu:03d}.FITRES" ) ]
                 if len(fname) > 1:
                     raise RuntimeError( "Too many matches!" )
                 fname = fname[0]
@@ -206,7 +205,7 @@ class RomanSurveySummary:
                 raise RuntimeError( f"Failed to match {ver}" )
             return match.group(1)
 
-        cosmodf = pandas.read_csv( self.subdir / 'DATA_FILES/BBC_SUMMARY_wfit.FITRES', sep='\s+', comment='#' )
+        cosmodf = pandas.read_csv( self.indir / 'DATA_FILES/BBC_SUMMARY_wfit.FITRES', sep='\s+', comment='#' )
         cosmodf['NAME'] = cosmodf['VERSION'].apply( nameversionstrip )
         cosmodf.drop( [ 'VARNAMES:', 'ROW', 'VERSION' ], axis=1, inplace=True )
 
@@ -215,8 +214,8 @@ class RomanSurveySummary:
         snrmaxdf.set_index( [ 'NAME', 'ORDINAL' ], inplace=True )
         tierdf.sort_values( [ 'NAME', 'TIER'], inplace=True )
         tierdf.set_index( [ 'NAME', 'TIER'], inplace=True )
-        obsdf.sort_values( [ 'NAME', 'TIER', 'FILTER' ] )
-        obsdf.set_index( [ 'NAME', 'TIER', 'FILTER' ] )
+        obsdf.sort_values( [ 'NAME', 'TIER', 'FILTER' ], inplace=True )
+        obsdf.set_index( [ 'NAME', 'TIER', 'FILTER' ], inplace=True )
         zhistdf.sort_values( ['NAME', 'FIELD', 'MU', 'z'], inplace=True )
         zhistdf.set_index( ['NAME', 'FIELD', 'MU', 'z'], inplace=True )
         cosmodf.sort_values( ['NAME', 'FITOPT', 'MUOPT'], inplace=True )
@@ -231,4 +230,4 @@ class RomanSurveySummary:
 
         if savecache:
             for attr in 'infodf', 'snrmaxdf', 'tierdf', 'obsdf', 'zhistdf', 'cosmodf':
-                getattr( self, attr ).to_pickle( self.subdir / f'{attr}.pkl' )
+                getattr( self, attr ).to_pickle( self.outdir / f'{attr}.pkl' )
