@@ -79,7 +79,7 @@ def snzhist( sim, fitopt, mu ):
         ax.legend( fontsize=12 )
         ax.tick_params( "both", labelsize=12 )
         ax.set_xlabel( r'z', fontsize=16 )
-        ax.set_ylabel( r'n', fontsize=16 )
+        ax.set_ylabel( r'n Roman-discovered SNe', fontsize=16 )
 
         bio = io.BytesIO()
         fig.savefig( bio, format='png' )

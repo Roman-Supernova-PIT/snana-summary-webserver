@@ -39,6 +39,7 @@ RUN mkdir /code/lib
 WORKDIR /code
 COPY webservice.py webservice.py
 COPY static/*.js /code/static/
+COPY static/*.css /code/static/
 COPY rkwebutil/rkwebutil.js /code/static/rkwebutil.js
 COPY templates/*.html /code/templates/
 COPY lib/parse_snana.py /code/lib/
