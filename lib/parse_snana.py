@@ -3,279 +3,461 @@ import pathlib
 import re
 import gzip
 import yaml
+import json
+import subprocess
+import logging
+import pickle
+import argparse
 import numpy
 import pandas
+
+_logger = logging.getLogger("main")
+_logout = logging.StreamHandler( sys.stderr )
+_logger.addHandler( _logout )
+_formatter = logging.Formatter( f'[%(asctime)s - %(levelname)s] - %(message)s',
+                                datefmt='%Y-%m-%d %H:%M:%S' )
+_logout.setFormatter( _formatter )
+_logger.setLevel( logging.INFO )
+
+class NumpyEncoder(json.JSONEncoder ):
+    def default( self, obj ):
+        if isinstance( obj, numpy.int64 ):
+            return int( obj )
+        if isinstance( obj, numpy.float64 ):
+            return float( obj )
+        return super().default( obj )
 
 class RomanSurveySummary:
     known_filters = ['R', 'Z', 'Y', 'J', 'H', 'F', 'K']
     surveynameparse = re.compile( '^(.*)\.SIMLIB(\.gz)?' )
-    
-    def __init__( self, outdir, indirs=[] ):
+
+    def __init__( self, outdir, searchdir=None, snrmaxcut=5. ):
         self.outdir = pathlib.Path( outdir )
         self.collections = {}
-        for d in indirs:
-            direc = pathlib.Path( d )
-            self.read_files( d.name, indir=direc )
+        self.snana_scratchdir = {}
+        self.snrmaxcut = snrmaxcut
+        if searchdir is not None:
+            self.read_all_outputs_in( searchdir )
 
-    def get_survey_info( self, input_file, printing=True ):
-        input_file = pathlib.Path( input_file )
-        
-        #Survey name
-        match = RomanSurveySummary.surveynameparse.search( input_file.name )
-        if match is None:
-            raise RuntimeError( f"Failed to parse {input_file.name} for .*\\.SIMLIB(\\.gz)" )
-        surveyname = match.group(1)
+    def _read_inp_file( self, inputfile ):
+        with open( inputfile ) as ifp:
+            blob = yaml.safe_load( ifp.read() )
 
-        ifp = None
-        
-        #Read the documentation from the SIMLIB file
+        surveyinfo = blob['CONFIG_SURVEY']
+        instrinfo = blob['CONFIG_INSTRUMENT']
+        analysisinfo = blob['CONFIG_ANALYSIS_PREP']
+
+        # Turn some of the arrays into subdicts
+        parse_snrmax = re.compile( r'^\s*(?P<snr>\d*\.?\d+)\s+\[(?P<lam0>\d*\.?\d+),'
+                                   r'\s+(?P<lam1>\d*\.?\d+)\]' )
+        fm = []
+        for line in surveyinfo['FORCE_SNRMAX']:
+            match = parse_snrmax.search( line )
+            if match is None:
+                raise ValueError( f"Failed to parse FORCE_SNRMAX line \"{line}\"" )
+            fm.append( { 'snr': float(match.group('snr')),
+                         'lam0': float(match.group('lam0')),
+                         'lam1': float(match.group('lam1')) } )
+        surveyinfo['FORCE_SNRMAX'] = fm
+
+        parse_mjd_season = re.compile( r'^\s*(?P<mjd0>\d*\.?\d+)\s+(?P<mjd1>\d*\.?\d+)' )
+        seasons = []
+        for line in surveyinfo['MJD_SEASON']:
+            match = parse_mjd_season.search( line )
+            if match is None:
+                raise ValueError( f"Failed to parse MJD_SEASON line {line}" )
+            seasons.append( { 'season_mjd0': float( match.group('mjd0') ),
+                              'season_mjd1': float( match.group('mjd1') ) } )
+        surveyinfo['MJD_SEASON'] = seasons
+
+        # I have a problem.
+        # I know, I'll solve it with regular expressions!
+        # Now I have two problems.
+        parse_tier = re.compile( r'^\s*(?P<tier>[^/\s]+)(/\d+)?\s+(?P<ra>\d*\.?\d+)\s+(?P<dec>[\+\-]?\d*\.?\d+)\s+'
+                                 r'(?P<bands>\S+)\s+\[\s*(?P<relarea>[^\]]+)\s*\]\s*'
+                                 r'\[\s*(?P<dt_visit>[^\]]+)\s*\]\s+\[\s*(?P<z_snrmatch>[^\]])+\s*\]' )
+        tiers = []
+        for line in surveyinfo['TIERS']:
+            match = parse_tier.search( line )
+            if match is None:
+                raise ValueError( f"Failed to parse TIERS line \"{line}\"" )
+            tiers.append( { 'name': match.group('tier'),
+                            'ra': float( match.group('ra') ),
+                            'dec': float( match.group('dec') ),
+                            'bands': [ i for i in match.group('bands') ],
+                            'relarea': [ int(i) for i in re.split( r'\s*,\s*', match.group('relarea') ) ],
+                            'dt_visit': [ float(i) for i in re.split( r'\s*,\s*', match.group('dt_visit') ) ],
+                            'z_snrmatch': [ float(i) for i in re.split( r'\s*,\s*', match.group('z_snrmatch') ) ] } )
+
+        analysisinfo[ 'muopt' ] = [  { 'name': 'standard', 'idsurvey_select': -99 } ]
+        muparse = re.compile( r'^\s*(?P<muname>.*)\s+idsurvey_select=(?P<surveyid>\d+)' )
+        hackremovethismuparse = re.compile( '^\s*idsurvey_select=(?P<surveyid>\d+)' )
+        for i, line in enumerate( analysisinfo['BBC']['MUOPT'] ):
+            match = muparse.search( line )
+            if match is None:
+                match = hackremovethismuparse.search( line )
+                muname = '(unnamed)'
+                if match is None:
+                    raise ValueError( f"Failed to parse BBC.MUOPT line {line}" )
+            else:
+                muname = match.group('muname')
+            analysisinfo['muopt'].append( { 'name': muname,
+                                            'idsurvey_select': int( match.group('surveyid') ) } )
+
+        return surveyinfo, instrinfo, analysisinfo, tiers
+
+
+    def _read_simlib_doc( self, snana_outdir, simlibbasename, tiers ):
+        surveyinfo = { 'tiers': {} }
+
+        simlib = snana_outdir / f'{simlibbasename}.SIMLIB'
+        if not simlib.is_file():
+            simlibgz = simlib.parent / f'{simlib.name}.gz'
+            if not simlibgz.is_file():
+                raise FileNotFoundError( f"Couldn't find {simlib}" )
+            simlib = simlibgz
+
         lines = []
-        if ( input_file.name[:-3] == '.gz' ):
-            ifp = gzip.open( input_file, 'rt' )
+        if ( simlib.name[:-3] == '.gz' ):
+            ifp = gzip.open( simlib, 'rt' )
         else:
-            ifp = open( input_file, 'rt' )
+            ifp = open( simlib, 'rt' )
         for line in ifp:
             if line[0:18] == "DOCUMENTATION_END:": break
             lines.append( line )
         ifp.close()
-        config_yaml = yaml.safe_load( '\n'.join( lines ) )
+        simlib_doc_yaml = yaml.safe_load( '\n'.join( lines ) )['DOCUMENTATION']
 
-        # Build the return value in obs_dict
+        # Going to assume that things like FORCE_SNRMAX just match
+        # Parse out the tier info
 
-        doc = config_yaml['DOCUMENTATION']
+        for tieri, tier in enumerate( tiers ):
+            ( name, bands, ntile, nvisit, area,
+              dt_visit, NLIBID, zSNRMATCH, OpenFrac )= simlib_doc_yaml['TIER_INFO'][tieri].split()
+            name = re.sub( "/.*$", "", name )
+            if name != tier['name']:
+                raise ValueError( f"Tier mismatch in {simlib}; found {name} where expected {tier['name']}" )
+            surveyinfo['tiers'][name] = {
+                'bands': { i:{} for i in bands },
+                'ntile': int( ntile ),
+                'nvisit': int( nvisit ),
+                'area': float( area ),
+                'dt_visit': float( dt_visit ),
+                'NLIBID': int( NLIBID ),
+                'zSNRMATCH': float( zSNRMATCH ),
+                'OpenFrac': float(OpenFrac) }
+            exptimes = simlib_doc_yaml['TIER_EXPOSURE_TIMES'][tieri].split()
+            exptimes[0] = re.sub( "/.*$", "", exptimes[0] )
+            if exptimes[0] != name:
+                raise ValueError( f"Tier mismatch in {simlib} at exposure times; found {exptimes[0]} "
+                                  f"where expected {name}" )
+            if exptimes[1] != bands:
+                raise ValueError( f"Tier exposure time mismatch for {simlib}, tier {name}: "
+                                  f"found {exptimes[1]} where expected {bands}" )
+            for band in bands:
+                if band not in RomanSurveySummary.known_filters:
+                    raise ValueError( f"Unknown band {band} in {simlib}, tier {name}" )
 
-        objs_dict = { 'TIME_SUM_OBS': float( doc['TIME_SUM_OBS'] ),
-                      'TIME_SUM_SEASON': float( doc['TIME_SUM_SEASON'] ),
-                      'RANDOM_REJECT_OBS': float( doc['RANDOM_REJECT_OBS'] ),
-                      'TIME_SLEW': float( doc['TIME_SLEW'] ) }
-
-        objs_dict['FORCE_SNRMAX'] = []
-
-        forcesnrre = re.compile( '^\s*(\d+)\s*\[\s*(\d+),\s*(\d+)\s*\]$' )
-        for force_snrmax in doc['FORCE_SNRMAX']:
-            match = forcesnrre.search( force_snrmax )
-            if match is None:
-                raise ValueError( f"Failed to parse \"{force_snrmax}\" as a FORCE_SNRMAX entry" );
-            objs_dict['FORCE_SNRMAX'].append( { 'snr': match.group(1),
-                                                'lam0': match.group(2),
-                                                'lam1': match.group(3) } )
-
-        objs_dict['TIERS'] = {}
-        for tierinfo, tierexp in zip( doc['TIER_INFO'],
-                                      doc['TIER_EXPOSURE_TIMES'] ):
-            name = None
-            for kw, val in zip ( ['name', 'bands', 'ntile', 'nvisit', 'Area', 'dt_visit',
-                                  'NLIBID', 'zSNRMATCH', 'OpenFrac' ],
-                                 tierinfo.split() ):
-                if kw == 'name':
-                    name = val
-                    objs_dict['TIERS'][name] = {}
-                elif kw == "bands":
-                    pass
-                elif name is None:
-                    raise RuntimeError( "No name" )
+            for band in RomanSurveySummary.known_filters:
+                if band in bands:
+                    bandi = bands.index( band )
+                    surveyinfo['tiers'][name]['bands'][band] = float( exptimes[bandi+2] )
                 else:
-                    objs_dict['TIERS'][name][kw] = float( val )
-            if name is None:
-                raise RuntimeError( "No name" )
+                    surveyinfo['tiers'][name]['bands'][band] = 0.
 
-            exptimeinfo = tierexp.split()
-            if exptimeinfo[0] != name:
-                raise RuntimeError( f"Exposure time name {exptimeinfo[0]} doesn't match tier name {name}" )
-            bands = exptimeinfo[1]
-            exptimes = exptimeinfo[2:]
-            if len(bands) != len(exptimes):
-                raise RuntimeError( f"Number of bands {len(bands)} != len(exptimes)={len(exptimes)}" )
-            objs_dict['TIERS'][name]['EXPTIME'] = { k: float(v) for k, v in zip( bands, exptimes ) }
-            for filt in RomanSurveySummary.known_filters:
-                if filt not in objs_dict['TIERS'][name]['EXPTIME']:
-                    objs_dict['TIERS'][name]['EXPTIME'][filt] = 0.
-            for filt in objs_dict['TIERS'][name]['EXPTIME'].keys():
-                if filt not in RomanSurveySummary.known_filters:
-                    raise RuntimeError( f"Unknown filter {filt}" )
-            
-        return objs_dict, surveyname
-    
+            return surveyinfo
 
-    def read_files( self, collection, indir=None, regen=False, savecache=True ):
-        if not regen:
-            mustredo = False
-            for attr in ( 'infodf', 'tierdf', 'obsdf', 'zhistdf', 'cosmodf' ):
-                if not ( self.outdir / f'{collection}_{attr}.pkl' ).is_file():
-                    sys.stderr.write( f"Didn't find {self.outdir}/{collection}_{attr}.pkl, regenerating all pkls.\n" )
-                    mustredo = True
+    def _gen_zhists( self, dumpfilepath, gentypes ):
+
+        # TODO : scaling CC by 10 (or whatever)
+
+        dumpdf = pandas.read_csv( dumpfilepath, delim_whitespace=True, comment='#', skip_blank_lines=True )
+
+        fields = dumpdf['FIELD'].unique()
+        types = dumpdf['GENTYPE'].unique()
+
+        hist = { 'tier': [], 'gentype': [], 'zCMB': [], 'n': [] }
+        snrmaxhist = { 'tier': [], 'gentype': [], 'zCMB': [], 'n': [] }
+        snrmax2hist = { 'tier': [], 'gentype': [], 'zCMB': [], 'n': [] }
+        snrmax3hist = { 'tier': [], 'gentype': [], 'zCMB': [], 'n': [] }
+        for field in fields:
+            fielddf = dumpdf[ dumpdf['FIELD'] == field ]
+            for zlow in numpy.arange( 0., 3.1, 0.1 ):
+                sne_at_z = dumpdf[ ( dumpdf['ZCMB'] >= zlow ) & ( dumpdf['ZCMB'] < zlow + 0.1 ) ]
+                for gentype in gentypes:
+                    hist['tier'].append( field )
+                    snrmaxhist['tier'].append( field )
+                    snrmax2hist['tier'].append( field )
+                    snrmax3hist['tier'].append( field )
+                    hist['gentype'].append( gentype )
+                    snrmaxhist['gentype'].append( gentype )
+                    snrmax2hist['gentype'].append( gentype )
+                    snrmax3hist['gentype'].append( gentype )
+                    hist['zCMB'].append( zlow )
+                    snrmaxhist['zCMB'].append( zlow )
+                    snrmax2hist['zCMB'].append( zlow )
+                    snrmax3hist['zCMB'].append( zlow )
+                    hist['n'].append( len(sne_at_z) )
+                    snrmaxhist['n'].append( len( sne_at_z[ sne_at_z['SNRMAX'] > self.snrmaxcut ] ) )
+                    snrmax2hist['n'].append( len( sne_at_z[ sne_at_z['SNRMAX2'] > self.snrmaxcut ] ) )
+                    snrmax3hist['n'].append( len( sne_at_z[ sne_at_z['SNRMAX3'] > self.snrmaxcut ] ) )
+
+        return hist, snrmaxhist, snrmax2hist, snrmax3hist
+
+
+    def _read_dump( self, collection, sndatabasename, simlibbasename ):
+
+        # Find the SNANA output scratch directory
+        #  (We know the parent will be the same for all sims)
+
+        if collection not in self.snana_scratchdir.keys():
+            _logger.debug( f"Running sana.exe GETINFO {sndatabasename}_{simlibbasename} to find "
+                           f"SNANA data dir" )
+            retries = 5
+            while retries > 0:
+                try:
+                    res = subprocess.run( [ 'snana.exe', 'GETINFO', f'{sndatabasename}_{simlibbasename}' ],
+                                          capture_output=True, timeout=30 )
+                    if len( res.stderr ) > 0:
+                        raise RuntimeError( f"Failed to run snana.exe: {res.stderr}" )
+                    retries = 0
+                except subprocess.TimeoutExpired as ex:
+                    if retries > 0:
+                        _logger.warning( f"snana.exe run timed out, trying again" )
+                    else:
+                        _logger.error( f"snana.exe run timed out repeatedly, dying" )
+                        raise RuntimeError( f"snana.exe run timed out repeatedly, dying" )
+                    retries -= 1
+            for line in res.stdout.decode( "utf-8" ).split("\n"):
+                if line[0:12] == 'SNDATA_PATH:':
+                    self.snana_scratchdir[collection] = pathlib.Path( line.split()[1] ).parent
                     break
-            if not mustredo:
-                self.collections[collection] = {}
-                for attr in ( 'infodf', 'snrmaxdf', 'tierdf', 'obsdf', 'zhistdf', 'cosmodf' ):
-                    self.collections[attr] = pandas.read_pickle( self.outdir / f"{collection}_{attr}.pkl" ) )
-                return
+            _logger.debug( f"...done running snana.exe" )
 
-        infodf = None
-        snrmaxdf = None
-        tierdf = None
-        obsdf = None
-        zhistdf = None
-        cosmodf = None
+        if collection not in self.snana_scratchdir.keys():
+            raise RuntimeError( f"Failed to find snana_scratchdir for {collection}" )
 
-        if indir is None:
-            indir = collection
-        
-        simlibs = list( indir.glob( "*.SIMLIB" ) )
-        simlibsgz = list( indir.glob( "*.SIMLIB.gz" ) )
-        for simlib in simlibsgz:
-            nogz = simlib.parent / simlib.name[:-3]
-            if nogz not in simlibs:
-                simlibs.append( simlib )
-        
-        for simlib in simlibs:
-            outdict, name = self.get_survey_info( simlib )
+        sndatadir = self.snana_scratchdir[collection] / f'{sndatabasename}_{simlibbasename}'
 
-            # Make infodf based on all the fields that are the same one SIMLIB
-            
-            tmpdf = pandas.DataFrame( { k:[outdict[k]] for k in outdict.keys()
-                                        if k not in [ 'TIERS', 'FORCE_SNRMAX' ] } )
-            tmpdf['NAME'] = name
-            if infodf is None:
-                infodf = tmpdf
+        # Read the .README file to get the gentype to string type match
+
+        lines = []
+        with open( sndatadir / f'{sndatabasename}_{simlibbasename}.README' ) as ifp:
+            for line in ifp:
+                if line[0:18] == 'DOCUMENTATION_END:' : break
+                lines.append( line )
+        readme_yaml = yaml.safe_load( '\n'.join( lines ) )
+
+        gentypemap = {}
+        for gentype, namestr in readme_yaml['DOCUMENTATION']['GENTYPE_TO_NAME'].items():
+            cols = namestr.split()
+            if cols[0] == 'Ia':
+                gentypemap[ gentype ] = 'Ia'
             else:
-                infodf = pandas.concat( [ infodf, tmpdf ], axis=0 )
+                gentypemap[ gentype ] = cols[1]
 
-            # Make snrmaxdf to hold the FORCE_SNRMAX entries for the SIMLIB
-                
-            for i, snrinfo in enumerate( outdict['FORCE_SNRMAX'] ):
-                tmpdf = pandas.DataFrame( [ snrinfo ] )
-                tmpdf['NAME'] = name
-                tmpdf['ORDINAL'] = i
-                if snrmaxdf is None:
-                    snrmaxdf = tmpdf
-                else:
-                    snrmaxdf = pandas.concat( [ snrmaxdf, tmpdf ], axis=0 )
+        # Build the histograms
 
-            # Make tierdf to hold general information about tiers (everything but filter/exptime)
-            # and obsdf to hold the filter/exptime pairs
-                    
-            curtierdf = None
-            for tier, tierinfo in outdict['TIERS'].items():
-                # I do not understand why above I had to do k:[outdict[k]], but here I do k:tierinfo[k]
-                # Pandas is very mysterious
-                tmpdf = pandas.DataFrame( [ { k:tierinfo[k] for k in tierinfo.keys() if k != 'EXPTIME' } ] )
-                tmpdf[ 'NAME' ] = name
-                tmpdf[ 'TIER' ] = tier
-                if tierdf is None:
-                    tierdf = tmpdf
-                else:
-                    tierdf = pandas.concat( [ tierdf, tmpdf ], axis=0)
-                if curtierdf is None:
-                    curtierdf = tmpdf
-                else:
-                    curtierdf = pandas.concat( [ curtierdf, tmpdf ], axis=0 )
+        dumpfilepath = sndatadir / f'{sndatabasename}_{simlibbasename}.DUMP'
+        ( zhist, snrmaxzhist,
+          snrmax2zhist, snrmax3zhist ) = self._gen_zhists( dumpfilepath, gentypemap.keys() )
 
-                tmpdf = pandas.DataFrame( [ { 'FILTER': filt, 'EXPTIME': tierinfo['EXPTIME'][filt] }
-                                            for filt in tierinfo['EXPTIME'].keys() ] )
-                tmpdf[ 'NAME' ] = name
-                tmpdf[ 'TIER' ] = tier
-                tmpdf['FILTER'] = pandas.Categorical( tmpdf['FILTER'], RomanSurveySummary.known_filters )
+        return gentypemap, zhist, snrmaxzhist, snrmax2zhist, snrmax3zhist
 
-                if obsdf is None:
-                    obsdf = tmpdf
-                else:
-                    obsdf = pandas.concat( [ obsdf, tmpdf ], axis=0 )
-
-            # (This is needed for the next df)
-            curtierdf.set_index( [ 'NAME', 'TIER' ], inplace=True )
-
-            # Make zhistdf holding a histogram of number of SNe Ia as a function of z
-            
-            for mu in [ 0, 1 ]:
-                fname = [ i for i in ( indir / "DATA_FILES" ).glob( f"*{name}/FITOPT000_MUOPT{mu:03d}.FITRES" ) ]
-                if len(fname) > 1:
-                    raise RuntimeError( "Too many matches!" )
-                if len( fname ) == 0:
-                    fname = [ i for i in
-                              ( indir / "DATA_FILES" ).glob( f"*{name}/FITOPT000_MUOPT{mu:03d}.FITRES.gz" ) ]
-                if len( fname ) == 0:
-                    raise FileNotFoundError( f"Couldn't find a FITRES for {name}" )
-                fname = fname[0]
-                tmpdf = pandas.read_csv( fname, comment='#', sep='\s+' )
-                
-                knownfields = tmpdf['FIELD'].unique()
-                # sys.stderr.write( f"knownfields: {knownfields}\n" )
-                for field in knownfields:
-                    found = False
-                    for t in curtierdf.xs( name, level='NAME' ).index.unique( 'TIER' ).values:
-                        if t[0:len(field)] == field:
-                            if found:
-                                raise ValueError( f"Found {t} more than once" )
-                            tmpdf.loc[ tmpdf['FIELD'] == field, 'FIELD'] = t
-                            found = True
-                    if not found:
-                        sys.stderr.write( f"WARNING: didn't find {field} for {name}, mu={mu}; skipping\n" )
-                        tmpdf = tmpdf[ tmpdf['FIELD'] != field ]
-
-                tmpsurveyzdict = { 'NAME': [], 'FIELD': [], 'MU': [], 'z': [], 'n': [] }
-                for field in tmpdf['FIELD'].unique():
-                    hist, bins = numpy.histogram( tmpdf.loc[ tmpdf['FIELD'] == field, 'zHD' ],
-                                                  bins=numpy.arange( 0, 3.2, 0.1 ) )
-                    for i in range(len(hist)):
-                        tmpsurveyzdict['NAME'].append( name )
-                        tmpsurveyzdict['FIELD'].append( field )
-                        tmpsurveyzdict['MU'].append( mu )
-                        tmpsurveyzdict['zHD'].append( bins[i] )
-                        tmpsurveyzdict['n'].append( hist[i] )
-                tmpzdf = pandas.DataFrame( tmpsurveyzdict )
-                if zhistdf is None:
-                    zhistdf = tmpzdf
-                else:
-                    zhistdf = pandas.concat( [ zhistdf, tmpzdf ], axis=0 )
-
-                # zhistdf.sort_values( ['NAME', 'FIELD', 'MU', 'z'], inplace=True )
+        surveys[simlibbasename]['zhist'] = zhist
+        surveys[simlibbasename]['snrmaxdzhist'] = snrmaxzhist
+        surveys[simlibbasename]['snrmax2dzhist'] = snrmax2zhist
+        surveys[simlibbasename]['snrmax3dzhist'] = snrmax3zhist
 
 
-        # read the BBC_SUMMARY into cosmodf
-        
-        nameversionre = re.compile( '^.*_DATA_(ROMAN.*)$' )
+    def read_files( self, collection, inputfile, regen=False, savecache=True, clobber=False ):
+        """Load information from a single survey collection.
 
-        def nameversionstrip( ver ):
-            match = nameversionre.search( ver )
-            if match is None:
-                raise RuntimeError( f"Failed to match {ver}" )
-            return match.group(1)
+        Parameters
+        ==========
+        collection : str
+            The name that will identify this collection in the objects
+            collections dict.
 
-        fpath = indir / 'DATA_FILES/BBC_SUMMARY_wfit.FITRES'
-        if not fpath.is_file():
-            fpath = indir / 'DATA_FILES/BBC_SUMMARY_wfit.FITRES.gz'
-        if not fpath.is_file():
-            raise FileNotFoundError( f"Failed to find BBC_SUMMARY_wfit.FITRES(.gz)" )
-        cosmodf = pandas.read_csv( fpath, sep='\s+', comment='#' )
-        cosmodf['NAME'] = cosmodf['VERSION'].apply( nameversionstrip )
-        cosmodf.drop( [ 'VARNAMES:', 'ROW', 'VERSION' ], axis=1, inplace=True )
+        inputfile : str or Path
+            The INP_makeSimlib_*.config file; it must be in the SNANA
+            output directory, as its parent will be used to find the
+            various SIMLIB files.
 
-        # Sort and index all the dataframes
-        
-        infodf.set_index( 'NAME', inplace=True )
-        snrmaxdf.sort_values( [ 'NAME', 'ORDINAL' ], inplace=True )
-        snrmaxdf.set_index( [ 'NAME', 'ORDINAL' ], inplace=True )
-        tierdf.sort_values( [ 'NAME', 'TIER'], inplace=True )
-        tierdf.set_index( [ 'NAME', 'TIER'], inplace=True )
-        obsdf.sort_values( [ 'NAME', 'TIER', 'FILTER' ], inplace=True )
-        obsdf.set_index( [ 'NAME', 'TIER', 'FILTER' ], inplace=True )
-        zhistdf.sort_values( ['NAME', 'FIELD', 'MU', 'z'], inplace=True )
-        zhistdf.set_index( ['NAME', 'FIELD', 'MU', 'z'], inplace=True )
-        cosmodf.sort_values( ['NAME', 'FITOPT', 'MUOPT'], inplace=True )
-        cosmodf.set_index( ['NAME', 'FITOPT', 'MUOPT'], inplace=True )
+        regen : bool, default False
+            If False, will try to read the necessary JSON files from the
+            outdir passed to the object at construction, rather than
+            trying to rebuild them from the SNANA outputs.  If True,
+            will ignore existing JSON files.
 
-        # Safe to self
-        
-        self.collections[ collection ] = { 'infodf': infodf,
-                                           'snrmaxdf': snrmaxdf,
-                                           'tierdf': tierdf,
-                                           'obsdf': obsdf,
-                                           'zhistdf': zhistdf,
-                                           'cosmodf': cosmodf
-                                          }
+        savecache : bool, default True
+            If the information is rebuilt from the SNANA outputs, save
+            JSON files named {collection}_{structure}.json with either
+            dicts or pandas DataFrames.
+
+        clobber : bool, default False
+           This has nothing to do with files; set regen=True to force
+           overwriting existing JSON files.  This has to do with
+           internal memeory; if we try to read a collection we've
+           already read, raise an error unless this is True.
+
+        Will add to self.collections with key collection and value:
+           { 'surveyinfo': dict with keys OUTDIR, FORCE_TEXPOSE_LIST, FORCE_SIMGEN_INPUT_FILE,
+                                          FORCE_NGEN, NLIBID_TOT, TIME_SUM_OBS, TEXPOSE_MIN,
+                                          RANDOM_REJECT_OBS,
+                                'MJD_SEASON': [ { 'season_mjd0': mjd0, 'season_mjd1': mjd1 }, ... ],
+                                'FORCE_SNRMAX': [ { 'snr': snr, 'lam0': lam0, 'lam1': lam1 }, ... ]
+                                'FoM': [ { 'muopt_dex': int, 'muopt': str, 'FoM_stat': float }, ... ]
+             'tiers': dict { 'name': tier name, 'ra': ra, 'dec': dec,
+                             'bands': array of letters,
+                             'relarea': array of ints,
+                             'dt_visit': array of floats,
+                             'z_snrmatc': array of floats,
+                           }
+             'instrinfo': dict of stuff,
+             'analysisinfo': dict with a bunch of keys including
+                           'muopt': [ { 'name': str, 'idsurvey_select': int } ]
+             'surveys': { name : { 'tiers': { tier: { (several other keys),
+                                                      'bands': { letter: exptime, ... },
+                                                      'ntile': int,
+                                                      'nvisit': int,
+                                                      'area': float,
+                                                      'dt_visit': float,
+                                                      'NLIBID': int,
+                                                      'zSNRMATCH': float,
+                                                      'OpenFrac': float,
+                                   'zhist': { 'tier': [...], 'gentype': [...], 'zCMB': [...], 'n': [...] }
+                                   'snrmaxzhist': <same structure>
+                                   'snrmaxz2hist': <same structure>
+                                   'snrmaxz3hist': <same structure> } },
+                                   'gentypemap' : { gentype: name, ... }
+                                   'muopt': [ { 'name': str,
+                                                'idsurvey_select': int,
+                                                 (bunch of cosmology keys, including 'FoM_stat') }
+                                            ]
+
+                         }
+
+        The zhist thingies are set up to be easy to convert to a Pandas dataframe.
+
+        """
+        if ( not clobber ) and ( collection in self.collections.keys() ):
+            raise RuntimeError( f"Not clobbering collection {collection}" )
+
+        # TODO read cache
+
+        inputfile = pathlib.Path( inputfile ).resolve()
+        snana_outdir = inputfile.parent
+
+        # Read the INP file
+
+        surveyinfo, instrinfo, analysisinfo, tiers = self._read_inp_file( inputfile )
+
+        sndatabasename = f"{analysisinfo['SIM']['PREFIX']}_DATA"
+
+        # Make sure an assumption I'm going to make is true, that the
+        # number of areas, dt_visits, and zSNRMATCHes are the same for all tiers.
+
+        surveyparamlens = {
+            'relarea': None,
+            'dt_visit': None,
+            'z_snrmatch': None }
+        for tier in tiers:
+            for var in surveyparamlens.keys():
+                if surveyparamlens[var] is None:
+                    surveyparamlens[var] = len( tier[var] )
+                elif surveyparamlens[var] != len( tier[var] ):
+                    raise ValueError( f"The number of {var} is not the same for all tiers." )
+
+        # Start building the individual surveys
+
+        surveys = {}
+        for ai, relarea in enumerate( tiers[0]['relarea'] ):
+            for ti, dt_visit in enumerate( tiers[0]['dt_visit'] ):
+                for zi, z_snrmatch in enumerate( tiers[0]['z_snrmatch'] ):
+                    simlibbasename = f'ROMAN-a{ai:02d}-t{ti:02d}-z{zi:02d}'
+                    _logger.debug( f"Processing {simlibbasename}" )
+
+                    surveys[simlibbasename] = self._read_simlib_doc( snana_outdir, simlibbasename, tiers )
+                    ( gentypemap, zhist, snrmaxzhist,
+                      snrmax2zhist, snrmax3zhist ) = self._read_dump( collection, sndatabasename, simlibbasename )
+                    surveys[simlibbasename]['gentypemap'] = gentypemap
+                    surveys[simlibbasename]['zhist'] = zhist
+                    surveys[simlibbasename]['snrmaxzhist'] = snrmaxzhist
+                    surveys[simlibbasename]['snrmax2zhist'] = snrmax2zhist
+                    surveys[simlibbasename]['snrmax3zhist'] = snrmax3zhist
+
+        # Get the cosmology and figure of merit from the BBC files
+
+        _logger.debug( "Reading BBC_SUMMARY_wfit.FITRES" )
+        bbcsummary = pandas.read_csv( ( snana_outdir / f'OUTPUT3_BBC_{sndatabasename}_ROMAN'
+                                        / 'BBC_SUMMARY_wfit.FITRES'),
+                                      delim_whitespace=True, comment='#' )
+        if len( bbcsummary['FITOPT'].unique() ) > 1:
+            raise ValueError( f"Assumption failure: there is more than one FITOPT!" )
+        if bbcsummary['FITOPT'].unique()[0] != 0:
+            raise ValueError( f"Assumption failure: FITOPT is not 0" )
+
+        muopts = list( bbcsummary['MUOPT'].unique() )
+        muopts.sort()
+        if ( muopts != [ i for i in range(len(analysisinfo['muopt'])) ] ):
+            raise ValueError( f"muopts in bbcsummary for {sndatabasename} not what was expected!" )
+
+        for survey in surveys.keys():
+            surveys[survey]['muopt'] = []
+            for muopt in muopts:
+                thisbbc = bbcsummary[ ( bbcsummary['MUOPT'] == muopt ) &
+                                      ( bbcsummary['VERSION'] == f'{sndatabasename}_{survey}' ) ]
+                if len( thisbbc ) != 1:
+                    raise ValueError( f"Found {len(thisbbc)} lines in BBC file for {survey}, muopt={muopt}" )
+                bbcdict = thisbbc.iloc[0].to_dict()
+                bbcdict['FoM_stat'] = bbcdict['FoM']
+                del bbcdict['FoM']
+                surveys[survey]['muopt'].append( bbcdict )
+
+        # Done
+
+        self.collections[ collection ] = {
+            'surveyinfo': surveyinfo,
+            'tiers': tiers,
+            'instrinfo': instrinfo,
+            'analysisinfo': analysisinfo,
+            'surveys': surveys }
+
         # Save to cache dir
-        
+
         if savecache:
-            for attr in 'infodf', 'snrmaxdf', 'tierdf', 'obsdf', 'zhistdf', 'cosmodf':
-                self.collections[attr].to_pickle( self.outdir / f'{collection}_{attr}.pkl' )
+            for attr in ( 'surveyinfo', 'tiers', 'instrinfo', 'analysisinfo', 'surveys' ):
+                with open( self.outdir / f'{snana_outdir.name}_{attr}.json', 'w' ) as ofp:
+                    # pickle.dump( self.collections[collection][attr], ofp )
+                    json.dump( self.collections[collection][attr], ofp, cls=NumpyEncoder )
+
+    def read_all_outputs_in( self, searchdir ):
+        raise NotImplementedError( "read_all_outputs_in() not implemented" )
+
+# ======================================================================
+
+def main():
+    parser = argparse.ArgumentParser( 'parse_snana',
+                                      description="do things",
+                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter )
+    parser.add_argument( "-v", "--verbose", action='store_true', default=False, help="Show debug info" )
+    parser.add_argument( "-o", "--outdir", default=".", help="Output directory for pkl files" )
+    parser.add_argument( "-i", "--inps", nargs='+', help="INP files to read" )
+    args = parser.parse_args()
+
+    if args.verbose:
+        _logger.setLevel( logging.DEBUG )
+
+    ss = RomanSurveySummary( args.outdir )
+    for inpfile in args.inps:
+        inpfile = pathlib.Path( inpfile )
+        _logger.info( f"Reading {inpfile}..." )
+        p = pathlib.Path( inpfile )
+        ss.read_files( inpfile.name, inpfile )
+
+    _logger.info( f"Done." )
+
+
+if __name__ == "__main__":
+    main()
