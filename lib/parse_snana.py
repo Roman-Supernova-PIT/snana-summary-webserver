@@ -131,12 +131,10 @@ class RomanSurveySummary:
         # Going to assume that things like FORCE_SNRMAX just match
         # Parse out the tier info
 
-        for tieri, tier in enumerate( tiers ):
+        for tieri, tierstr in enumerate( simlib_doc_yaml['TIER_INFO'] ):
             ( name, bands, ntile, nvisit, area,
-              dt_visit, NLIBID, zSNRMATCH, OpenFrac )= simlib_doc_yaml['TIER_INFO'][tieri].split()
+              dt_visit, NLIBID, zSNRMATCH, OpenFrac ) = tierstr.split()
             name = re.sub( "/.*$", "", name )
-            if name != tier['name']:
-                raise ValueError( f"Tier mismatch in {simlib}; found {name} where expected {tier['name']}" )
             surveyinfo['tiers'][name] = {
                 'bands': { i:{} for i in bands },
                 'ntile': int( ntile ),
@@ -165,7 +163,7 @@ class RomanSurveySummary:
                 else:
                     surveyinfo['tiers'][name]['bands'][band] = 0.
 
-            return surveyinfo
+        return surveyinfo
 
     def _gen_zhists( self, dumpfilepath, gentypes ):
 
@@ -183,8 +181,9 @@ class RomanSurveySummary:
         for field in fields:
             fielddf = dumpdf[ dumpdf['FIELD'] == field ]
             for zlow in numpy.arange( 0., 3.1, 0.1 ):
-                sne_at_z = dumpdf[ ( dumpdf['ZCMB'] >= zlow ) & ( dumpdf['ZCMB'] < zlow + 0.1 ) ]
+                sne_at_z = fielddf[ ( fielddf['ZCMB'] >= zlow ) & ( fielddf['ZCMB'] < zlow + 0.1 ) ]
                 for gentype in gentypes:
+                    gentypesne = sne_at_z[ sne_at_z['GENTYPE'] == gentype ]
                     hist['tier'].append( field )
                     snrmaxhist['tier'].append( field )
                     snrmax2hist['tier'].append( field )
@@ -197,10 +196,10 @@ class RomanSurveySummary:
                     snrmaxhist['zCMB'].append( zlow )
                     snrmax2hist['zCMB'].append( zlow )
                     snrmax3hist['zCMB'].append( zlow )
-                    hist['n'].append( len(sne_at_z) )
-                    snrmaxhist['n'].append( len( sne_at_z[ sne_at_z['SNRMAX'] > self.snrmaxcut ] ) )
-                    snrmax2hist['n'].append( len( sne_at_z[ sne_at_z['SNRMAX2'] > self.snrmaxcut ] ) )
-                    snrmax3hist['n'].append( len( sne_at_z[ sne_at_z['SNRMAX3'] > self.snrmaxcut ] ) )
+                    hist['n'].append( len(gentypesne) )
+                    snrmaxhist['n'].append( len( gentypesne[ gentypesne['SNRMAX'] > self.snrmaxcut ] ) )
+                    snrmax2hist['n'].append( len( gentypesne[ gentypesne['SNRMAX2'] > self.snrmaxcut ] ) )
+                    snrmax3hist['n'].append( len( gentypesne[ gentypesne['SNRMAX3'] > self.snrmaxcut ] ) )
 
         return hist, snrmaxhist, snrmax2hist, snrmax3hist
 
