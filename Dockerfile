@@ -14,6 +14,13 @@
 # To bind-mount an external data dir, also add:
 #    --mount type=bind,source=<datadir>,target=/data \
 #
+# So the command for both, run from here, might be:
+#
+#  docker run -d --name snana-summary -p 8080:8080 \
+#    --mount type=bind,source=$PWD,target=/code \
+#    --mount type=bind,source=$PWD/data,target=/data \
+#    snana-summary-webserver
+#
 # where <datadir> is where the .pkl files exported from
 # lib/parse_snana.py live (perhaps $PWD/data).
 #
