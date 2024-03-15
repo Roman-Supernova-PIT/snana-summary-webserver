@@ -10,6 +10,8 @@ var snanasum = {};
 
 snanasum.Context = function()
 {
+    this.collections = null;
+    this.collectiondivs = {};
 };
 
 snanasum.Context.filter_order = { 'R': 0,
@@ -37,10 +39,115 @@ snanasum.Context.filter_sort = function( a, b ) {
     }
 }
 
-snanasum.Context.prototype.get_filter_str = function( sim, tier ) {
+snanasum.Context.prototype.renderpage = function()
+{
+    var self = this;
+    
+    if ( this.collections == null ) {
+        let connector = new rkWebUtil.Connector( "/collections" );
+        connector.sendHttpRequest( "", {}, function( r ) { self.parse_collections_and_render( r ); } );
+    }
+    else {
+        this.actually_renderpage();
+    }
+};
+
+snanasum.Context.prototype.parse_collections_and_render = function( data )
+{
+    this.maindiv = document.getElementById( "pagebody" );
+    rkWebUtil.wipeDiv( this.maindiv );
+
+    if ( data.hasOwnProperty( 'error' ) ) {
+        rkWebUtil.elemaker( "h2", this.maindiv, { "text": "Error from server" } );
+        rkWebUtil.elemaker( "p", this.maindiv, { 'text': data['error'] } );
+        return;
+    }
+
+    this.collections = data['collections'];
+    this.actually_renderpage();
+};
+
+snanasum.Context.prototype.actually_renderpage = function( data )
+{
+    var self = this
+    var h3;
+
+    h3 = rkWebUtil.elemaker( "h3", this.maindiv, { "text": "Show simulation collection: " } );
+    this.collectionwidget = rkWebUtil.elemaker( "select", h3 );
+    let first = false;
+    for ( let collection of this.collections ) {
+        let option = rkWebUtil.elemaker( "option", this.collectionwidget,
+                                         { "text": collection,
+                                           "attributes": { "value": collection } } );
+        if ( first ) {
+            option.setAttribute( "selected", "selected" );
+            first = false;
+        }
+    }
+
+    rkWebUtil.elemaker( "hr", this.maindiv );
+    this.collectiondiv = rkWebUtil.elemaker( "div", this.maindiv );
+
+    this.collectionwidget.addEventListener( "change", function() {
+        let col = self.collectionwidget.value;
+        if ( ! self.collectiondivs.hasOwnProperty( col ) ) {
+            self.collectiondivs[col] = new snanasum.Collection( col, self.collectiondiv );
+        }
+        self.collectiondivs[col].renderpage();
+    } );
+};
+
+// **********************************************************************
+// **********************************************************************
+// **********************************************************************
+
+snanasum.Collection = function( collection, maindiv )
+{
+    this.maindiv = maindiv;
+    this.collection = collection;
+    this.surveylist = null;
+    this.tierlist = null;
+    this.sortkeys = null;
+};
+
+snanasum.Collection.prototype.renderpage = function()
+{
+    var self = this;
+    if ( this.surveylist == null ) {
+        let connector = new rkWebUtil.Connector( "/summarydata" );
+        connector.sendHttpRequest( "/"+this.collection, {},
+                                   function( resp ) { self.parse_summary_info_and_render( resp ); } );
+    }
+    else {
+        this.actually_renderpage();
+    }
+};
+
+snanasum.Collection.prototype.parse_summary_info_and_render = function( data )
+{
+    this.surveyinfo = data.surveyinfo;
+    this.instrinfo = data.instrinfo;
+    this.analysisinfo = data.analysisinfo;
+    this.tiers = data.tiers;
+    this.surveys = data.surveys;
+
+    this.surveylist = Object.keys( this.surveys );
+    this.tierlist = [];
+    for ( let survey of this.surveylist ) {
+        for ( let tier of Object.keys( this.surveys[survey].tiers ) ) {
+            if ( !this.tierlist.includes( tier ) ) {
+                this.tierlist.push( tier );
+            }
+        }
+    }
+
+    this.actually_renderpage();
+};
+
+snanasum.Collection.prototype.get_filter_str = function( sim, tier ) {
     let filters = [];
-    for ( let filt of Object.keys( this.obs[sim][tier] ) ) {
-        if ( this.obs[sim][tier][filt].EXPTIME > 0 ) {
+    for ( let filt of Object.keys( this.surveys[sim]['tiers'][tier]['bands'] ) ) {
+        if ( this.surveys[sim]['tiers'][tier]['bands'][filt] > 0 ) {
             filters.push( filt );
         }
     }
@@ -48,67 +155,31 @@ snanasum.Context.prototype.get_filter_str = function( sim, tier ) {
     return filters.join();
 };
 
-snanasum.Context.prototype.renderpage = function()
-{
-    var self = this;
-    let connector = new rkWebUtil.Connector( "/summarydata" );
-    connector.sendHttpRequest( "", {}, function( resp ) { self.actually_renderpage( resp ); } );
-};
-
-snanasum.Context.prototype.actually_renderpage = function( data )
+snanasum.Collection.prototype.actually_renderpage = function( data )
 {
     var self = this;
 
-    this.shown = null;
-
-    this.info = data.info;
-    this.snrmax = data.snrmax;
-    this.tier = data.tier;
-    this.obs = data.obs;
-    this.zhist = data.zhist;
-    this.cosmo = data.cosmo;
-
-    this.sims = Object.keys( this.cosmo );
-    
-    this.maindiv = document.getElementById( "pagebody" );
-
-    let topdiv = rkWebUtil.elemaker( "div", this.maindiv );
-    
-    var p = rkWebUtil.elemaker( "p", topdiv );
-    var a = rkWebUtil.elemaker( "a", p, { 'text': "Sims By FoM",
-                                          'classes': [ 'link' ],
-                                          'click': function() { self.show_by_fom(); } } );
-    rkWebUtil.elemaker( "hr", this.maindiv );
-
+    rkWebUtil.wipeDiv( this.maindiv );
     this.contentdiv = rkWebUtil.elemaker( "div", this.maindiv );
-    this.show_by_fom();
 
-};
-
-snanasum.Context.prototype.show_by_fom = function()
-{
-    if ( this.shown == "by fom" ) return;
-
-    var self = this;
+    let div = rkWebUtil.elemaker( "div", this.contentdiv, { "classes": [ "main_hbox" ] } );
+    this.tabdiv = rkWebUtil.elemaker( "div", div, { "classes": [ "tabdiv" ] } );
+    this.infodiv = rkWebUtil.elemaker( "div", div, { "classes": [ "infodiv" ] } );
     
-    rkWebUtil.wipeDiv( this.contentdiv );
-    let div = rkWebUtil.elemaker( "div", this.contentdiv, { "classes": [ "byfom_hbox" ] } );
-    this.byfom_tabdiv = rkWebUtil.elemaker( "div", div, { "classes": [ "byfom_tabdiv" ] } );
-    this.byfom_infodiv = rkWebUtil.elemaker( "div", div, { "classes": [ "byfom_infodiv" ] } );
+    if ( this.sortkeys == null ) {
+        this.sortkeys = [ "FoM_stat" ];
+        this.sortorders = [ -1 ];
+        let firstsurvey = Object.keys( this.surveys )[0]
+        this.sorttier = Object.keys( this.surveys[firstsurvey].tiers )[0]
+    }
+
+    let sortables = [ 'FoM_stat', 'filters', 'nvisit', 'ntile', 'dt_visit', 'zSNRMATCH' ]
     
-    // WARNING : hardcoding fitpopt=0, mu=0
-    var fitopt = 0;
-    var mu = 0;
-
-    this.sortkeys = [ "FoM" ];
-    this.sortorders = [ -1 ];
-    this.sorttier = Object.keys( this.tier[this.sims[0]] )[0];
-
-    let p = rkWebUtil.elemaker( "p", this.byfom_tabdiv, { "text": "Sort rows based on values for: " } );
-    this.byfom_which_tier_sort = rkWebUtil.elemaker( "select", p );
+    let p = rkWebUtil.elemaker( "p", this.tabdiv, { "text": "Sort rows based on values for: " } );
+    this.which_tier_sort = rkWebUtil.elemaker( "select", p );
     let first = false;
-    for ( let tier of Object.keys( this.tier[this.sims[0]] ) ) {
-        let option = rkWebUtil.elemaker( "option", this.byfom_which_tier_sort,
+    for ( let tier of this.tierlist ) {
+        let option = rkWebUtil.elemaker( "option", this.which_tier_sort,
                                          { "text": tier,
                                            "attributes": { "value": tier } } );
         if ( first ) {
@@ -116,30 +187,31 @@ snanasum.Context.prototype.show_by_fom = function()
             first = false;
         }
     }
-    this.byfom_which_tier_sort.addEventListener( "change", function() { self.changeSortTier() } );
+    this.which_tier_sort.addEventListener( "change", function() { self.changeSortTier() } );
 
-    this.byfom_table = rkWebUtil.elemaker( "table", this.byfom_tabdiv );
+    this.sim_table = rkWebUtil.elemaker( "table", this.tabdiv );
     
-    this.render_sim_table( this.sortkeys, this.sortorders );
+    this.render_sim_table( );
 }
 
-snanasum.Context.prototype.render_sim_table = function( sortkeys, sortorders ) {
+snanasum.Collection.prototype.render_sim_table = function() {
     var self = this;
 
     // WARNING : hardcoding fitopt=0, mu=0
     var fitopt = 0;
     var mu = 0;
 
-    rkWebUtil.wipeDiv( this.byfom_table );
+    rkWebUtil.wipeDiv( this.sim_table );
     
-    this.sims.sort( function( a, b ) {
-        for ( let i in sortkeys ) {
-            let key = sortkeys[i];
-            let order = sortorders[i];
+    this.surveylist.sort( function( a, b ) {
+        for ( let i in self.sortkeys ) {
+            let key = self.sortkeys[i];
+            let order = self.sortorders[i];
 
-            if ( key == 'FoM' ) {
-                if ( self.cosmo[a][fitopt][mu].FoM > self.cosmo[b][fitopt][mu].FoM ) return 1 * order;
-                else if ( self.cosmo[a][fitopt][mu].FoM < self.cosmo[b][fitopt][mu].FoM ) return -1 * order;
+            
+            if ( key == 'FoM_stat' ) {
+                if ( self.surveys[a].muopt[0].FoM_stat > self.surveys[b].muopt[0].FoM_stat ) return 1 * order;
+                else if ( self.surveys[a].muopt[0].FoM_stat < self.surveys[b].muopt[0].FoM_stat ) return -1 * order;
             }
             else if ( key == "filters" ) {
                 let filta = self.get_filter_str( a, self.sorttier );
@@ -148,8 +220,10 @@ snanasum.Context.prototype.render_sim_table = function( sortkeys, sortorders ) {
                 else if ( filta < filtb ) return -1 * order;
             }
             else {
-                if ( self.tier[a][self.sorttier][key] > self.tier[b][self.sorttier][key] ) return 1 * order;
-                else if ( self.tier[a][self.sorttier][key] < self.tier[b][self.sorttier][key] ) return -1 * order;
+                if ( self.surveys[a].tiers[self.sorttier][key] >
+                     self.surveys[b].tiers[self.sorttier][key] ) return 1 * order;
+                else if ( self.surveys[a].tiers[self.sorttier][key] <
+                          self.surveys[b].tiers[self.sorttier][key] ) return -1 * order;
             }
         }
         return 0;
@@ -157,10 +231,11 @@ snanasum.Context.prototype.render_sim_table = function( sortkeys, sortorders ) {
                 
     var table, tr, th, td, p;
 
-    tr = rkWebUtil.elemaker( "tr", this.byfom_table );
+    tr = rkWebUtil.elemaker( "tr", this.sim_table );
     th = rkWebUtil.elemaker( "th", tr, { "text": "Sim" } );
     th = rkWebUtil.elemaker( "th", tr, { "text": "Tier" } );
     th = rkWebUtil.elemaker( "th", tr, { "text": "z target" } );
+
     rkWebUtil.elemaker( "span", th, { "text": "▲", "classes": [ "link" ],
                                       "click": function() { self.addSortKey( "zSNRMATCH", 1 ) } } );
     rkWebUtil.elemaker( "span", th, { "text": "▼", "classes": [ "link" ],
@@ -187,19 +262,21 @@ snanasum.Context.prototype.render_sim_table = function( sortkeys, sortorders ) {
                                       "click": function() { self.addSortKey( "dt_visit", 1 ) } } );
     rkWebUtil.elemaker( "span", th, { "text": "▼", "classes": [ "link" ],
                                       "click": function() { self.addSortKey( "dt_visit", -1 ) } } );
-    th = rkWebUtil.elemaker( "th", tr, { "text": "FoM" } );
+    th = rkWebUtil.elemaker( "th", tr, { "text": "FoM_stat" } );
     rkWebUtil.elemaker( "span", th, { "text": "▲", "classes": [ "link" ],
-                                      "click": function() { self.addSortKey( "FoM", 1 ) } } );
+                                      "click": function() { self.addSortKey( "FoM_stat", 1 ) } } );
     rkWebUtil.elemaker( "span", th, { "text": "▼", "classes": [ "link" ],
-                                      "click": function() { self.addSortKey( "FoM", -1 ) } } );
+                                      "click": function() { self.addSortKey( "FoM_stat", -1 ) } } );
     
     let whichcolor = 0;
-    for ( let sim of this.sims ) {
-        let firstsim = true;
-        for ( let tier in this.tier[sim] ) {
-            tr = rkWebUtil.elemaker( "tr", this.byfom_table );
-            if ( firstsim ) {
-                td = rkWebUtil.elemaker( "td", tr, { "attributes": { "rowspan": Object.keys(this.tier[sim]).length }
+    for ( let sim of this.surveylist ) {
+        let survey = this.surveys[sim];
+        let firstofsim = true;
+        for ( let tier of this.tierlist ) {
+            if ( ! survey.tiers.hasOwnProperty( tier ) ) continue;
+            tr = rkWebUtil.elemaker( "tr", this.sim_table );
+            if ( firstofsim ) {
+                td = rkWebUtil.elemaker( "td", tr, { "attributes": { "rowspan": Object.keys(survey.tiers).length }
                                                    } );
                 let textnode = rkWebUtil.elemaker( "span", td, { "text": sim,
                                                                  "classes": [ "link" ],
@@ -209,48 +286,33 @@ snanasum.Context.prototype.render_sim_table = function( sortkeys, sortorders ) {
             let cls = (whichcolor == 1) ? "lotsfaded" : "mostfaded";
             tr.classList.add( cls );
             td = rkWebUtil.elemaker( "td", tr, { "text": tier } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": this.tier[sim][tier].zSNRMATCH } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].zSNRMATCH } );
             
-            // let lamtd = rkWebUtil.elemaker( "td", tr );
-            // let snrtd = rkWebUtil.elemaker( "td", tr );
-            // let first = true;
-            // for ( let ordinal in this.snrmax[sim] ) {
-            //     if ( !first ) {
-            //         snrtd.appendChild( document.createElement( "br" ) );
-            //         lamtd.appendChild( document.createElement( "br" ) );
-            //     } else {
-            //         first = false;
-            //     }
-            //     snrtd.appendChild( document.createTextNode( this.snrmax[sim][ordinal].snr ) );
-            //     lamtd.appendChild( document.createTextNode( String( this.snrmax[sim][ordinal].lam0 ) + "—" +
-            //                                                 String( this.snrmax[sim][ordinal].lam1 ) ) )
-            // }
-
             td = rkWebUtil.elemaker( "td", tr, { "text": this.get_filter_str( sim, tier ) } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": this.tier[sim][tier].ntile } )
-            td = rkWebUtil.elemaker( "td", tr, { "text": this.tier[sim][tier].nvisit } )
-            td = rkWebUtil.elemaker( "td", tr, { "text": this.tier[sim][tier].dt_visit } )
+            td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].ntile } )
+            td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].nvisit } )
+            td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].dt_visit } )
             
-            // WARNING : hardcoding fitopt=0, mu=0
-            if ( firstsim ) {
-                firstsim = false;
-                td = rkWebUtil.elemaker( "td", tr, { "text": this.cosmo[sim][fitopt][mu].FoM,
-                                                     "attributes": { "rowspan": Object.keys(this.tier[sim]).length }
+            // WARNING : hardcoding muopt[0]
+            if ( firstofsim ) {
+                firstofsim = false;
+                td = rkWebUtil.elemaker( "td", tr, { "text": survey.muopt[0].FoM_stat,
+                                                     "attributes": { "rowspan": Object.keys(survey.tiers).length }
                                                    } );
             }
         }
     }
 };
 
-snanasum.Context.prototype.changeSortTier = function() {
-    let newtier = this.byfom_which_tier_sort.value;
+snanasum.Collection.prototype.changeSortTier = function() {
+    let newtier = this.which_tier_sort.value;
     if ( newtier != this.sorttier ) {
         this.sorttier = newtier;
         this.render_sim_table( this.sortkeys, this.sortorders );
     }
 }
 
-snanasum.Context.prototype.addSortKey = function( sortkey, order ) {
+snanasum.Collection.prototype.addSortKey = function( sortkey, order ) {
     let i = this.sortkeys.indexOf( sortkey );
     if (  i >= 0 ) {
         this.sortkeys.splice( i, 1 );
@@ -262,82 +324,108 @@ snanasum.Context.prototype.addSortKey = function( sortkey, order ) {
 };
 
 
-snanasum.Context.prototype.showSim = function( sim ) {
+snanasum.Collection.prototype.showSim = function( sim ) {
     let self = this;
     
     let table, tr, th, td, h3, h4, hbox, div, p;
     
-    rkWebUtil.wipeDiv( this.byfom_infodiv );
-    let img = rkWebUtil.elemaker( "img", this.byfom_infodiv,
-                                  { "attributes": { "src": "/snzhist/" + sim + "/0/0",
+    rkWebUtil.wipeDiv( this.infodiv );
+    let img = rkWebUtil.elemaker( "img", this.infodiv,
+                                  { "attributes": { "src": "/snzhist/" + this.collection + "/" + sim,
                                                     "width": 600,
                                                     "height": 500,
                                                     "alt": "[z Histogram]" } } );
 
-    let text = sim + " ; FoM = " + this.cosmo[sim][0][0].FoM;
-    h3 = rkWebUtil.elemaker( "h3", this.byfom_infodiv, { "text": text } );
-    text = "t_sum_obs (d)=" + this.info[sim].TIME_SUM_OBS + ", " +
-    "t_sum_season (?)=" + this.info[sim].TIME_SUM_SEASON + ", " +
-        "f_rej=" + this.info[sim].RANDOM_REJECT_OBS + ", " +
-        "t_slew (s)=" + this.info[sim].TIME_SLEW;
-    p = rkWebUtil.elemaker( "p", this.byfom_infodiv, { "text": text } );
+    let text = sim + " ; FoM = " + this.surveys[sim].muopt[0].FoM_stat
+    h3 = rkWebUtil.elemaker( "h3", this.infodiv, { "text": text } );
+
+    hbox = rkWebUtil.elemaker( "div", this.infodiv, { "classes": [ "hbox2emgap" ] } )
     
-    hbox = rkWebUtil.elemaker( "div", this.byfom_infodiv, { "classes": [ "hbox2emgap" ] } );
+    table = rkWebUtil.elemaker( "table", hbox );
+    tr = rkWebUtil.elemaker( "tr", table );
+    rkWebUtil.elemaker( "th", tr, { "text": "Season" } );
+    rkWebUtil.elemaker( "th", tr, { "text": "mjd_0" } );
+    rkWebUtil.elemaker( "th", tr, { "text": "mjd_1" } );
+    rkWebUtil.elemaker( "th", tr, { "text": "Δmjd" } );
+    for ( let row in this.surveyinfo['MJD_SEASON'] ) {
+        let season = this.surveyinfo['MJD_SEASON'][row];
+        tr = rkWebUtil.elemaker( "tr", table );
+        rkWebUtil.elemaker( "td", tr, { "text": row } );
+        rkWebUtil.elemaker( "td", tr, { "text": season.season_mjd0 } );
+        rkWebUtil.elemaker( "td", tr, { "text": season.season_mjd1 } );
+        rkWebUtil.elemaker( "td", tr, { "text": season.season_mjd1 - season.season_mjd0 } );
+        
+    }
 
-    for ( let tier of Object.keys( this.tier[sim] ) ) {
-        div = rkWebUtil.elemaker( "div", hbox );
-        table = rkWebUtil.elemaker( "table", div );
-        tr = rkWebUtil.elemaker( "tr", table );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "tier" } );
-        td = rkWebUtil.elemaker( "td", tr, { "text": tier } );
-        tr = rkWebUtil.elemaker( "tr", table );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "ntile" } );
-        td = rkWebUtil.elemaker( "td", tr, { "text": this.tier[sim][tier].ntile } );
-        tr = rkWebUtil.elemaker( "tr", table );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "nvisit" } );
-        td = rkWebUtil.elemaker( "td", tr, { "text": this.tier[sim][tier].nvisit } );
-        tr = rkWebUtil.elemaker( "tr", table );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "Area" } );
-        td = rkWebUtil.elemaker( "td", tr, { "text": this.tier[sim][tier].Area } );
-        tr = rkWebUtil.elemaker( "tr", table );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "z_S/N" } );
-        td = rkWebUtil.elemaker( "td", tr, { "text": this.tier[sim][tier].zSNRMATCH } );
-        tr = rkWebUtil.elemaker( "tr", table );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "OpenFrac" } );
-        td = rkWebUtil.elemaker( "td", tr, { "text": this.tier[sim][tier].OpenFrac } );
+    table = rkWebUtil.elemaker( "table", hbox );
+    tr = rkWebUtil.elemaker( "tr", table );
+    rkWebUtil.elemaker( "th", tr, { "text": "Σt_obs" } );
+    rkWebUtil.elemaker( "td", tr, { "text": this.surveyinfo['TIME_SUM_OBS'] } );
+    tr = rkWebUtil.elemaker( "tr", table );
+    rkWebUtil.elemaker( "th", tr, { "text": "f_reject" } );
+    rkWebUtil.elemaker( "td", tr, { "text": this.surveyinfo['RANDOM_REJECT_OBS'] } );
+    
+    hbox = rkWebUtil.elemaker( "div", this.infodiv, { "classes": [ "hbox2emgap" ] } );
 
+    div = rkWebUtil.elemaker( "div", hbox );
+    table = rkWebUtil.elemaker( "table", div );
+    let trtiers = rkWebUtil.elemaker( "tr", table );
+    rkWebUtil.elemaker( "th", trtiers, { "text": "Tier" } );
+    let trntile = rkWebUtil.elemaker( "tr", table );
+    rkWebUtil.elemaker( "th", trntile, { "text": "ntile" } );
+    let trnvisit = rkWebUtil.elemaker( "tr", table );
+    rkWebUtil.elemaker( "th", trnvisit, { "text": "nvisit" } );
+    let trarea = rkWebUtil.elemaker( "tr", table );
+    rkWebUtil.elemaker( "th", trarea, { "text": "Area" } );
+    let trzsn = rkWebUtil.elemaker( "tr", table );
+    rkWebUtil.elemaker( "th", trzsn, { "text": "z_S/N" } );
+    let tropenfrac = rkWebUtil.elemaker( "tr", table );
+    rkWebUtil.elemaker( "th", tropenfrac, { "text": "Openfrac" } );
+    let trfilters = rkWebUtil.elemaker( "tr", table );
+    rkWebUtil.elemaker( "th", trfilters, { "text": "t_exp (s)" } );
+    for ( let tier of Object.keys( this.surveys[sim].tiers ) ) {
+        let tierinfo = this.surveys[sim].tiers[tier];
+        td = rkWebUtil.elemaker( "th", trtiers, { "text": tier } );
+        td = rkWebUtil.elemaker( "td", trntile, { "text": tierinfo.ntile } );
+        td = rkWebUtil.elemaker( "td", trnvisit, { "text": tierinfo.nvisit } );
+        td = rkWebUtil.elemaker( "td", trarea, { "text": tierinfo.area } );
+        td = rkWebUtil.elemaker( "td", trzsn, { "text": tierinfo.zSNRMATCH } );
+        td = rkWebUtil.elemaker( "td", tropenfrac, { "text": tierinfo.OpenFrac } );
+        td = rkWebUtil.elemaker( "td", trfilters );
+        
         let filters = [];
-        for ( let filt of Object.keys( this.obs[sim][tier] ) ) {
-            if ( this.obs[sim][tier][filt].EXPTIME > 0 ) {
+        for ( let filt of Object.keys( tierinfo.bands ) ) {
+            if ( tierinfo.bands[filt] > 0 ) {
                 filters.push( filt );
             }
         }
         filters.sort( snanasum.Context.filter_sort );
 
+        let firstfilt = true;
         for ( let filt of filters ) {
-            tr = rkWebUtil.elemaker( "tr", table );
-            th = rkWebUtil.elemaker( "th", tr, { "text": "t_exp (" + filt + ") (s)" } )
-            td = rkWebUtil.elemaker( "td", tr, { "text": this.obs[sim][tier][filt].EXPTIME } );
+            if ( firstfilt ) firstfilt=false;
+            else rkWebUtil.elemaker( "br", td );
+            td.appendChild( document.createTextNode( filt + ": " + tierinfo.bands[filt] ) );
         }
     }
 
-    p = rkWebUtil.elemaker( "p", this.byfom_infodiv,
-                            { "text": "Numbers above include the low-z survey.  Numbers below " +
-                              "are only from Roman." } );
+    // p = rkWebUtil.elemaker( "p", this.infodiv,
+    //                         { "text": "Numbers above include the low-z survey.  Numbers below " +
+    //                           "are only from Roman." } );
     
-    table = rkWebUtil.elemaker( "table", this.byfom_infodiv );
-    tr = rkWebUtil.elemaker( "tr", table );
-    th = rkWebUtil.elemaker( "th", tr, { "text": "z" } );
-    for ( let tier of Object.keys( this.tier[sim] ) ) {
-        th = rkWebUtil.elemaker( "td", tr, { "text": tier } );
-    }
-    for ( let z of Object.keys( this.zhist[sim][Object.keys(this.tier[sim])[0]][0] ) ) {
-        tr = rkWebUtil.elemaker( "tr", table );
-        td = rkWebUtil.elemaker( "td", tr, { "text": Math.round( z * 10 ) / 10 } );
-        for ( let tier of Object.keys( this.tier[sim] ) ) {
-            td = rkWebUtil.elemaker( "td", tr, { "text": this.zhist[sim][tier][0][z].n } );
-        }
-    }
+    // table = rkWebUtil.elemaker( "table", this.infodiv );
+    // tr = rkWebUtil.elemaker( "tr", table );
+    // th = rkWebUtil.elemaker( "th", tr, { "text": "z" } );
+    // for ( let tier of Object.keys( this.tier[sim] ) ) {
+    //     th = rkWebUtil.elemaker( "td", tr, { "text": tier } );
+    // }
+    // for ( let z of Object.keys( this.zhist[sim][Object.keys(this.tier[sim])[0]][0] ) ) {
+    //     tr = rkWebUtil.elemaker( "tr", table );
+    //     td = rkWebUtil.elemaker( "td", tr, { "text": Math.round( z * 10 ) / 10 } );
+    //     for ( let tier of Object.keys( this.tier[sim] ) ) {
+    //         td = rkWebUtil.elemaker( "td", tr, { "text": this.zhist[sim][tier][0][z].n } );
+    //     }
+    // }
 }
     
 export {snanasum}
