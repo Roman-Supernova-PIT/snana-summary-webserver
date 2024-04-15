@@ -39,6 +39,7 @@ def collections():
     d = pathlib.Path( "/data" )
     jsonlist = list( d.glob( '*surveys.json' ) )
     jsonlist = [ str(i.name).replace( '_surveys.json', '' ) for i in jsonlist ]
+    jsonlist.sort()
     return { 'status': 'ok',
              'collections': jsonlist }
 
