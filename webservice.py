@@ -10,10 +10,12 @@ import sys
 import traceback
 import io
 import re
+import math
 import json
 import pathlib
 import logging
 import numpy
+import pandas
 
 import flask
 
@@ -30,18 +32,6 @@ def pandas_to_dict( df ):
         dfdict[level] = pandas_to_dict( df.xs( level, level=0 ) )
     return dfdict
 
-@app.route( "/", strict_slashes=False )
-def mainpage():
-    return flask.render_template( 'snana-summary-root.html' )
-
-@app.route( "/collections", methods=['GET', 'POST'], strict_slashes=False )
-def collections():
-    d = pathlib.Path( "/data" )
-    jsonlist = list( d.glob( '*surveys.json' ) )
-    jsonlist = [ str(i.name).replace( '_surveys.json', '' ) for i in jsonlist ]
-    return { 'status': 'ok',
-             'collections': jsonlist }
-
 def readjson( collection, which ):
     f = pathlib.Path( f"/data/{collection}_{which}.json" )
     if not f.is_file():
@@ -55,6 +45,24 @@ def returnjson( collection, which ):
     response = flask.make_response( jsontext )
     response.headers['Content-Type'] = 'application/json'
     return response
+
+# ======================================================================
+
+@app.route( "/", strict_slashes=False )
+def mainpage():
+    return flask.render_template( 'snana-summary-root.html' )
+
+# ======================================================================
+
+@app.route( "/collections", methods=['GET', 'POST'], strict_slashes=False )
+def collections():
+    d = pathlib.Path( "/data" )
+    jsonlist = list( d.glob( '*surveys.json' ) )
+    jsonlist = [ str(i.name).replace( '_surveys.json', '' ) for i in jsonlist ]
+    jsonlist.sort()
+    return { 'status': 'ok',
+             'collections': jsonlist }
+# ======================================================================
 
 @app.route( "/surveyinfo/<collection>", methods=['GET', 'POST'], strict_slashes=False )
 def surveyinfo( collection ):
@@ -76,6 +84,8 @@ def tiers( collection ):
 def surveys( collection ):
     return returnjson( collection, 'surveys' )
 
+# ======================================================================
+
 @app.route( "/summarydata/<collection>", methods=['GET', 'POST'], strict_slashes=False )
 def summarydata( collection ):
     try:
@@ -91,6 +101,8 @@ def summarydata( collection ):
                                     f'"analysisinfo": {ai}, "tiers": {t}, "surveys": {s} }}' )
     response.headers['Content-Type'] = 'application/json'
     return response
+
+# ======================================================================
 
 @app.route( "/snzhist/<string:collection>/<string:sim>", methods=['GET','POST'], strict_slashes=False )
 @app.route( "/snzhist/<string:collection>/<string:sim>/<path:argstr>", methods=['GET','POST'], strict_slashes=False )
@@ -114,8 +126,6 @@ def snzhist( collection, sim, argstr=None ):
 
         if flask.request.is_json:
             data.update( flask.request.json() )
-
-        sys.stderr.write( f"After parsing, data={data}\n" )
 
         surveys = json.loads( readjson( collection, 'surveys' ) )
         if sim not in surveys.keys():
@@ -222,3 +232,274 @@ def snzhist( collection, sim, argstr=None ):
         sys.stderr.write( f"{traceback.format_exc()}\n" )
         return flask.abort( 500 )
 
+# ======================================================================
+
+@app.route( "/spechist/<string:which>/<string:collection>/<string:sim>/<path:argstr>",
+            methods=['GET','POST'], strict_slashes=False )
+def spechist( which, collection, sim, argstr=None ):
+    try:
+        data = { 'width': 600,
+                 'height': 500,
+                 'gentype': 10,
+                 'tier': "__ALL__",
+                 'zbin': None,
+                 'tbin': None,
+                 'magbin': None,
+                 'snrbin': None,
+                 'prism': 'P127',
+                 'band': 'J'
+                }
+        # Oh, look, a copy.  I should have used classes.
+        if argstr is not None:
+            kwargs = {}
+            for arg in argstr.split("/"):
+                match = re.search( '^(?P<k>[^=]+)=(?P<v>.*)$', arg )
+                if match is None:
+                    sys.stderr.write( f"error parsing url argument {arg}, must be key=value" )
+                    return f'error parsing url argument {arg}, must be key=value', 500
+                kwargs[ match.group('k') ] = match.group('v')
+            data.update( kwargs )
+
+        if flask.request.is_json:
+            data.update( flask.request.json() )
+        
+        if which not in ['mag', 'snr', 'z']:
+            return f'which must be one of mag, snr, or z'
+
+        surveys = json.loads( readjson( collection, 'surveys' ) )
+        if sim not in surveys.keys():
+            sys.stderr.write( f"error, could not find survey {sim} in collection {collection}\n" )
+            return f"error, could not find survey {sim} in collection {collection}", 500
+        
+        survey = surveys[sim]
+        if ( 'spechists' not in surveys[sim] ) or ( len(surveys[sim]['spechists']) == 0 ):
+            return f"Survey doesn't have prism info."
+        data['gentypemap'] = survey['gentypemap']
+        
+        spechists = survey['spechists']
+
+        if data['zbin'] is None:
+            data['zbin'] = 5
+        if data['tbin'] is None:
+            data['tbin'] = int( -spechists['tobsmin'] / spechists['deltat'] + 0.5 )
+        if data['magbin'] is None:
+            data['magbin'] = 5
+        if data['snrbin'] is None:
+            data['snrbin'] = 0
+
+        data['zbin'] = int( data['zbin'] )
+        data['z'] = spechists['zmin'] + data['zbin'] * spechists['deltaz']
+        data['tbin'] = int( data['tbin'] )
+        data['t'] = spechists['tobsmin'] + data['tbin'] * spechists['deltat']
+        data['magbin'] = int( data['magbin'] )
+        data['mag'] = spechists['mmin'] + data['magbin'] * spechists['deltam']
+        data['snrbin'] = int( data['snrbin'] )
+        data['snr'] = spechists['snrmin'] + data['snrbin'] * spechists['deltasnr']
+            
+        if data['tier'] == '__ALL__':
+            data['tier'] = list( spechists['tiers'].keys() )
+        else:
+            data['tier'] = [ data['tier'] ]
+
+        # Gentype counting
+        gentypes = []
+        for tier in data['tier']:
+            df = pandas.DataFrame( spechists['tiers'][tier][data['prism']][data['band']] )
+            if ( data['gentype'] == '__ALL__' ) or ( data['gentype'] == '__ALLBUTIA__' ):
+                for gentype in df['GENTYPE'].unique():
+                    if gentype not in gentypes:
+                        if ( data['gentype'] == '__ALL__' ) or ( gentype != 10 ):
+                            gentypes.append( gentype )
+
+        if len(gentypes) == 0:
+            gentype = data['gentype']
+            if str(gentype) not in data['gentypemap'].keys():
+                return f"Asked for unknown gentype {gentype}", 500
+            gentypes = [ gentype ]
+            
+        if which == 'mag':
+            return spechist_mag( sim, survey, spechists, gentypes, data, argstr )
+        elif which == "snr":
+            return spechist_snr( sim, survey, spechists, gentypes, data, argstr )
+        elif which == "z":
+            return spechist_z( sim, survey, spechists, gentypes, data, argstr )
+
+    except Exception as ex:
+        sys.stderr.write( f"Exception: {ex}\n" )
+        sys.stderr.write( f"{traceback.format_exc()}\n" )
+        return flask.abort( 500 )
+
+
+def spechist_z( sim, survey, spechists, gentypes, data, argstr ):
+    dpi = 72
+    fig = pyplot.figure( figsize=(data['width']/dpi, data['height']/dpi), dpi=dpi, tight_layout=True )
+    ax = fig.add_subplot( 1, 1, 1 )
+
+    # Pandafication
+    dfs = {}
+    for tier in data['tier']:
+        df = pandas.DataFrame( spechists['tiers'][tier][data['prism']][data['band']] )
+        df = df.loc[ ( df['tbin'] == data['tbin'] ) & ( df['snrbin'] >= data['snrbin'] ),
+                     [ 'GENTYPE', 'zbin', 'snrbin', 'n' ] ]
+        df = df.groupby( [ 'GENTYPE', 'zbin' ] ).sum()[ 'n' ].reset_index();
+        dfs[tier] = df
+        
+    nbars = len( data['tier'] ) * len( gentypes )
+    dpi = 72
+
+    fig = pyplot.figure( figsize=(data['width']/dpi, data['height']/dpi), dpi=dpi, tight_layout=True )
+    ax = fig.add_subplot( 1, 1, 1 )
+    totwid = 0.90
+    dz = spechists['deltaz']
+    onewid = totwid * dz / nbars
+    offset = 0.
+    for gentype in gentypes:
+        gentype = int( gentype )
+        for tier in data['tier']:
+            df = dfs[tier]
+            df = df[ df['GENTYPE'] == gentype ]
+            x = spechists['zmin'] + df['zbin'] * spechists['deltaz']
+            y = df['n']
+            ax.bar( x + offset, height=y, width=onewid, align='edge',
+                    label=f'{tier} {data["gentypemap"][str(gentype)]}' )
+            offset += totwid * dz / nbars
+
+    ax.legend( fontsize=12 )
+    ax.tick_params( "both", labelsize=12 )
+    ax.set_xlim( spechists['zmin'], spechists['zmax'] )
+    ax.set_xlabel( r'z_HEL', fontsize=16 )
+    ax.set_ylabel( r'N', fontsize=16 )
+    ax.set_title( f'{sim} ; FoM_stat = {survey["muopt"][0]["FoM_stat"]:.1f}\n'
+                  f'{data["prism"]}, band {data["band"]}, '
+                  f't=[{data["t"]:.0f},{data["t"]+spechists["deltat"]:.0f}) d, S/N≥{data["snr"]:.0f}', fontsize=16 )
+
+    bio = io.BytesIO()
+    fig.savefig( bio, format='svg' )
+    pyplot.close( fig )
+
+    response = flask.make_response( bio.getvalue() )
+    response.headers['Content-Type'] = 'image/svg+xml'
+
+    return response
+
+
+    
+def spechist_mag( sim, survey, spechists, gentypes, data, argstr ):
+    dpi = 72
+    fig = pyplot.figure( figsize=(data['width']/dpi, data['height']/dpi), dpi=dpi, tight_layout=True )
+    ax = fig.add_subplot( 1, 1, 1 )
+
+    # Pandafication
+    dfs = {}
+    for tier in data['tier']:
+        df = pandas.DataFrame( spechists['tiers'][tier][data['prism']][data['band']] )
+        df = df.loc[ ( df['tbin'] == data['tbin'] ) & ( df['zbin'] == data['zbin'] ), [ 'GENTYPE', 'magbin', 'n' ] ]
+        dfs[tier] = df
+
+    nbars = len( data['tier'] ) * len( gentypes )
+    dpi = 72
+
+    fig = pyplot.figure( figsize=(data['width']/dpi, data['height']/dpi), dpi=dpi, tight_layout=True )
+    ax = fig.add_subplot( 1, 1, 1 )
+    totwid = 0.90
+    dm = spechists['deltam']
+    onewid = totwid * dm / nbars
+    offset = 0.
+    for gentype in gentypes:
+        gentype = int( gentype )
+        for tier in data['tier']:
+            df = dfs[tier]
+            df = df[ df['GENTYPE'] == gentype ]
+            x = spechists['mmin'] + df['magbin'] * spechists['deltam']
+            y = df['n']
+            ax.bar( x + offset, height=y, width=onewid, align='edge',
+                    label=f'{tier} {data["gentypemap"][str(gentype)]}' )
+            offset += totwid * dm / nbars
+
+    ax.legend( fontsize=12 )
+    ax.tick_params( "both", labelsize=12 )
+    # xmin, xmax = ax.get_xlim()
+    # xmin = xmin if ( xmin >= spechists['mmin'] ) else spechists['mmin']
+    # xmax = xmax if ( xmax <= spechists['mmax'] ) else spechists['mmax']
+    xmin = spechists['mmin']
+    xmax = spechists['mmax']
+    xmin = math.floor( xmin )
+    xmax = math.ceil( xmax ) + 1
+    ax.set_xlim( xmin, xmax )
+    ax.set_xticks( numpy.arange( xmin, xmax, 1. ) )
+    ax.set_xlabel( f'mag_{data["band"]}', fontsize=16 )
+    ax.set_ylabel( r'N', fontsize=16 )
+    ax.set_title( f'{sim} ; FoM_stat = {survey["muopt"][0]["FoM_stat"]:.1f}\n'
+                  f'{data["prism"]}, '
+                  f't=[{data["t"]:.0f},{data["t"]+spechists["deltat"]:.0f}) d, '
+                  f'z=[{data["z"]:.2f},{data["z"]+spechists["deltaz"]:.2f})',
+                  fontsize=16 )
+
+    bio = io.BytesIO()
+    fig.savefig( bio, format='svg' )
+    pyplot.close( fig )
+
+    response = flask.make_response( bio.getvalue() )
+    response.headers['Content-Type'] = 'image/svg+xml'
+
+    return response
+
+
+def spechist_snr( sim, survey, spechists, gentypes, data, argstr ):
+    dpi = 72
+    fig = pyplot.figure( figsize=(data['width']/dpi, data['height']/dpi), dpi=dpi, tight_layout=True )
+    ax = fig.add_subplot( 1, 1, 1 )
+
+    # Pandafication
+    dfs = {}
+    snr0 = math.floor( ( 0. - spechists['snrmin'] ) / spechists['deltasnr'] + 0.5 )
+    snr20 = math.floor( ( 20. - spechists['snrmin'] ) / spechists['deltasnr'] + 0.5 )
+    for tier in data['tier']:
+        df = pandas.DataFrame( spechists['tiers'][tier][data['prism']][data['band']] )
+        df = df.loc[ ( df['tbin'] == data['tbin'] ) & ( df['zbin'] == data['zbin'] ), [ 'GENTYPE', 'snrbin', 'n' ] ]
+        df[ df['snrbin'] < snr0 ] = snr0
+        df[ df['snrbin'] > snr20 ] = snr20
+        df = df.groupby( [ 'GENTYPE', 'snrbin' ] ).sum().reset_index()
+        dfs[tier] = df
+
+    nbars = len( data['tier'] ) * len( gentypes )
+    dpi = 72
+
+    fig = pyplot.figure( figsize=(data['width']/dpi, data['height']/dpi), dpi=dpi, tight_layout=True )
+    ax = fig.add_subplot( 1, 1, 1 )
+    totwid = 0.90
+    dsnr = spechists['deltasnr']
+    onewid = totwid * dsnr / nbars
+    offset = 0.
+    for gentype in gentypes:
+        gentype = int( gentype )
+        for tier in data['tier']:
+            df = dfs[tier]
+            df = df[ df['GENTYPE'] == gentype ]
+            x = spechists['snrmin'] + df['snrbin'] * spechists['deltasnr']
+            y = df['n']
+            ax.bar( x + offset, height=y, width=onewid, align='edge',
+                    label=f'{tier} {data["gentypemap"][str(gentype)]}' )
+            offset += totwid * dsnr / nbars
+
+    ax.legend( fontsize=12 )
+    ax.tick_params( "both", labelsize=12 )
+    ax.set_xlim( 0., 21. )
+    ax.set_xticks( [ 0., 4., 8., 12., 16., 20. ],
+                   labels=[ "0", "4", "8", "12", "16", "20+" ] )
+    ax.set_xlabel( f'S/N_{data["band"]}', fontsize=16 )
+    ax.set_ylabel( r'N', fontsize=16 )
+    ax.set_title( f'{sim} ; FoM_stat = {survey["muopt"][0]["FoM_stat"]:.1f}\n'
+                  f'{data["prism"]}, '
+                  f't=[{data["t"]:.0f},{data["t"]+spechists["deltat"]:.0f}) d, '
+                  f'z=[{data["z"]:.2f},{data["z"]+spechists["deltaz"]:.2f})',
+                  fontsize=16 )
+
+    bio = io.BytesIO()
+    fig.savefig( bio, format='svg' )
+    pyplot.close( fig )
+
+    response = flask.make_response( bio.getvalue() )
+    response.headers['Content-Type'] = 'image/svg+xml'
+
+    return response

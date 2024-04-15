@@ -33,11 +33,19 @@ table tr th { border-bottom: 1px solid black; padding-left: 1em; padding-right: 
 table tr td { border-bottom: 1px solid black; padding-left: 1em; padding-right: 1em }
 table tr td { vertical-align: top }
 
+.dispinline { display: inline; }
+.dispnone { display: none; }
+.dispblock { display: block; }
+.dispflex { display: flex; }
+
 div.hbox { display: flex;
            flex-direction: row; }
 div.hbox2emgap { display: flex;
                  flex-direction: row;
                  gap: 2em; }
+
+div.vbox { display: flex;
+           flex-direction: column; }
 
 
 div.main_hbox { display: flex;
@@ -57,7 +65,31 @@ div.metainfodiv { flex-grow: 1;
                   overflow: auto;
                 }
 
-div.infodiv {}
+div.infodivtabs { border: 0;
+                  margin: 0;
+                  padding: 0;
+                }
+
+button.unseltab { border: 2px outset var(--half-faded-color );
+                  background: var(--most-faded-color);
+                  padding: 2px;
+                  margin: 2px;
+                }
+
+button.seltab { border: 2px inset var(--half-faded-color );
+                background: var(--lots-faded-color);
+                padding: 2px;
+                margin: 2px;
+              }
+
+
+
+div.infodiv { border: 2px solid var(--some-faded-color);
+              padding: 2px;
+              margin: 2px;
+              margin-top: 0px;
+              overflow: auto;
+            }
 
 div.zhist-img-container { display: flex;
                           flex-direction: column;
