@@ -105,7 +105,7 @@ class RomanSurveySummary:
                             'texpose_prism': [] } )
             if tiername in texpose_prism.keys():
                 tiers[-1]['texpose_prism'] = texpose_prism[tiername]
-                        
+
         analysisinfo[ 'muopt' ] = [  { 'name': 'standard', 'idsurvey_select': -99 } ]
         muparse = re.compile( r'^\s*(?P<muname>.*)\s+idsurvey_select=(?P<surveyid>\d+)' )
         hackremovethismuparse = re.compile( '^\s*idsurvey_select=(?P<surveyid>\d+)' )
@@ -254,7 +254,7 @@ class RomanSurveySummary:
 
         return sndatadir
 
-                                                   
+
     def _read_dump( self, collection, sndatabasename, simlibbasename ):
         sndatadir = self._get_snana_sndata_dir( collection, sndatabasename, simlibbasename )
 
@@ -288,56 +288,21 @@ class RomanSurveySummary:
         surveys[simlibbasename]['snrmax2dzhist'] = snrmax2zhist
         surveys[simlibbasename]['snrmax3dzhist'] = snrmax3zhist
 
-    def _read_spec( self, collection, sndatabasename, simlibbasename ):
-        # This one is distressingly slow; I'm not sure why
-        # (Yeah, for loops within for loops, but still.)
-        
-        # The specturm structure is, OMG:
+    def _read_spec( self, collection, sndatabasename, simlibbasename, tiers ):
+        # This one tries to make later summing of histogram seasier.
+        # It doesn't fully finish it.
         #
-        #  {  deltaz: 0.1,
-        #     deltat: 3.,
-        #     deltam: 0.25,
-        #     'tiers': { 
-        #       tiername: {
-        #         texposure: { 
-        #           filter: {
-        #             'by_z': {
-        #               'by_mag': { 
-        #                 gentype: {
-        #                   z_bin_lower: {
-        #                     t_bin_lower: [ mag_bin_lower ], [ n ] ]
-        #                   }
-        #                 },
-        #               },
-        #               'by_snr': {
-        #                 gentype: {
-        #                   z_bin_lower: {
-        #                     t_bin_lower: [ snr_bin_lower ], [ n ] ]
-        #                   }
-        #                 }
-        #               }
-        #             }
-        #             'by_min_snr': {
-        #               gentype: {
-        #                 snr_bin_lower: {
-        #                   t_bin_lower: [ z_bin_lower ], [ n ]
-        #                 }
-        #               }
-        #             }
-        #           }
-        #         }
-        #       }
-        #     }
-        #  }
+        # Within a tier/texpose, it bins by gentype, z, mag, snr, and t, and sums counts within those bins.
+
         sndatadir = self._get_snana_sndata_dir( collection, sndatabasename, simlibbasename )
 
         specfile = sndatadir / f'{sndatabasename}_{simlibbasename}.SPEC'
         _logger.debug( f"Parsing {specfile}" )
-        
+
         if not specfile.is_file():
             _logger.error( f"Can't find {specfile}, returning empty dict for spectrum info" )
             return {}
-        
+
         specdf = pandas.read_csv( specfile, delim_whitespace=True, comment='#', skip_blank_lines=True )
 
         zmin = 0.
@@ -352,7 +317,7 @@ class RomanSurveySummary:
         tobsmin = -33.
         tobsmax = 243.
         deltat = 10.
-        
+
         hist = { 'zmin': zmin,
                  'zmax': zmax,
                  'deltaz': deltaz,
@@ -371,99 +336,49 @@ class RomanSurveySummary:
             hist['tiers'][tier] = {}
             tierdf = specdf[ specdf['FIELD'] == tier ]
 
+            texpmap = {}
+            for tierinfo in tiers:
+                if tier == tierinfo['name']:
+                    texpmap[ int(tierinfo['texpose_prism'][0]) ] = "Prism P127"
+                    texpmap[ int(tierinfo['texpose_prism'][1]) ] = "Grism G150"
+
             texpvals = tierdf['TEXPOSE'].unique()
             if len( texpvals ) != 2:
                 _logger.error( f"{specfile.name} {tier} has != 2 TEXPOSE values" )
                 raise ValueError( f"{specfile.name} {tier} has != 2 TEXPOSE values" )
 
+
             # Note : lots of the int() calls below are because a
             #  later JSON export is going to fail if dictionary
             #  keys are numpy.int64
-                    
+
             for texpose in texpvals:
-                texpose = int(texpose)
+                prism = texpmap[ int(texpose) ]
                 _logger.debug( f"texpose {texpose}" )
-                texpdict = {}
-                texpdf = tierdf[ tierdf['TEXPOSE'] == texpose ].copy()
+                prismdf = tierdf[ tierdf['TEXPOSE'] == texpose ].copy()
+                prismdict = {}
+                prismdf['zbin'] = ( ( prismdf['zHEL'] - zmin ) / deltaz ).apply( int )
+                prismdf['tbin'] = ( ( prismdf['TOBS'] - tobsmin ) / deltat ).apply( int )
 
-                texpdf['zbin'] = ( ( texpdf['zHEL'] - zmin ) / deltaz ).apply( int )
-                texpdf['tbin'] = ( ( texpdf['TOBS'] - tobsmin ) / deltat ).apply( int )
-                
                 for band in [ 'Z', 'Y', 'J', 'H' ]:
-                    texpdict[band] = { 'by_z': { 'by_mag': {}, 'by_snr': {} }, 'by_min_snr': {} }
-                    _logger.debug( f"band {band}" )
-
                     magstr = f'{band}_mag_syn'
                     errstr = f'{band}_magerr_syn'
 
-                    filtdf = texpdf[ [ 'zbin', 'tbin', 'GENTYPE' ] ].copy()
-                    filtdf['mag'] = texpdf[magstr]
-                    filtdf['magerr'] = texpdf[errstr]
-                    filtdf['magbin'] = ( ( filtdf['mag'] - mmin ) / deltam ).apply(int)
-                    filtdf['snr'] = 2.5 / ( filtdf['magerr'] * 2.30258509299405 )
-                    filtdf.loc[ filtdf['magerr'] <= 0., 'snr' ] = 0.
-                    filtdf['snrbin'] = ( ( filtdf['snr'] - snrmin ) / deltasnr ).apply(int)
+                    banddf = prismdf[ [ 'GENTYPE', 'zbin', 'tbin', magstr, errstr ] ].copy()
+                    banddf['magbin'] = ( ( banddf[magstr] - mmin ) / deltam ).apply(int)
+                    banddf['snr'] = 2.5 / ( banddf[errstr] * 2.30258509299405 )
+                    banddf.loc[ banddf[errstr] <= 0., 'snr' ] = 0.
+                    banddf.loc[ banddf['snr'] > 20., 'snr' ] = 20.
+                    banddf['snrbin'] = ( ( banddf['snr'] - snrmin ) / deltasnr ).apply(int)
 
-                    maghist = ( filtdf.groupby( [ 'zbin', 'tbin', 'GENTYPE', 'magbin' ] )
-                                .count()['mag'].to_frame().reset_index() )
-                    maghist.sort_values( [ 'GENTYPE', 'zbin', 'tbin', 'magbin' ], inplace=True )
-                    maghist.set_index( [ 'GENTYPE', 'zbin', 'tbin', 'magbin' ], inplace=True )
+                    banddf.sort_values( [ 'GENTYPE', 'zbin', 'tbin', 'magbin', 'snrbin' ], inplace=True )
+                    banddf = banddf.groupby( [ 'GENTYPE', 'zbin', 'tbin', 'magbin', 'snrbin' ] ).count()['snr']
 
-                    for gentype in maghist.index.get_level_values('GENTYPE').unique():
-                        gentype=int(gentype)
-                        texpdict[band]['by_z']['by_mag'][gentype] = {}
-                        gentypedf = maghist.xs( gentype, level='GENTYPE' )
-                        for zbin in gentypedf.index.get_level_values('zbin').unique():
-                            zbin = int(zbin)
-                            z = zmin + deltaz * zbin
-                            zdf = gentypedf.xs( zbin, level='zbin' )
-                            texpdict[band]['by_z']['by_mag'][gentype][z] = {}
-                            for tbin in zdf.index.get_level_values('tbin').unique():
-                                tbin = int(tbin)
-                                t = tobsmin + deltat * tbin
-                                tdf = zdf.xs( tbin, level='tbin' )
-                                texpdict[band]['by_z']['by_mag'][gentype][z][t] = [ list( tdf.index.values ),
-                                                                                    list( tdf.mag.values ) ]
+                    banddf = banddf.to_frame().reset_index()
+                    banddf.rename( { 'snr': 'n' }, axis='columns', inplace=True )
+                    prismdict[band] = banddf.to_dict( 'list' )
 
-                    snrhist = ( filtdf.groupby( ['zbin', 'tbin', 'GENTYPE', 'snrbin' ] )
-                                .count()['snr'].to_frame().reset_index() )
-                    snrhist.sort_values( [ 'GENTYPE', 'zbin', 'tbin', 'snrbin' ], inplace=True )
-                    snrhist.set_index( [ 'GENTYPE', 'zbin', 'tbin', 'snrbin' ], inplace = True )
-
-                    for gentype in snrhist.index.get_level_values('GENTYPE').unique():
-                        gentype = int(gentype)
-                        texpdict[band]['by_z']['by_snr'][gentype] = {}
-                        gentypedf = snrhist.xs( gentype, level='GENTYPE' )
-                        for snrbin in gentypedf.index.get_level_values('snrbin').unique():
-                            snrbin = int(snrbin)
-                            snr = snrmin + deltasnr * snrbin
-                            snrdf = gentypedf.xs( snrbin, level='snrbin' )
-                            texpdict[band]['by_z']['by_snr'][gentype][snr] = {}
-                            for tbin in snrdf.index.get_level_values('tbin').unique():
-                                tbin = int(tbin)
-                                t = tobsmin + deltat * tbin
-                                tdf = snrdf.xs( tbin, level='tbin' )
-                                texpdict[band]['by_z']['by_snr'][gentype][snr][t] = [ list( tdf.index.values ),
-                                                                                      list( tdf.snr.values ) ]
-                                
-
-                    for gentype in snrhist.index.get_level_values('GENTYPE').unique():
-                        gentype = int(gentype)
-                        texpdict[band]['by_min_snr'][gentype] = {}
-                        gentypedf = snrhist.xs( gentype, level='GENTYPE' ).reset_index()
-                        texpdict[band]['by_min_snr'][gentype] = {}
-                        for snr in numpy.arange( snrmin, snrmax+deltasnr, deltasnr ):
-                            snrbin = int( ( snr - snrmin ) / deltasnr )
-                            snrdf = ( gentypedf[ gentypedf['snrbin'] > snrbin ]
-                                      .groupby( [ 'tbin', 'zbin' ] )['snr'].sum() )
-                            texpdict[band]['by_min_snr'][gentype][snr] = {}
-                            for tbin in snrdf.index.get_level_values( 'tbin' ).unique():
-                                tbin = int(tbin)
-                                t = tbin + deltat * tbin
-                                tdf = snrdf.xs( tbin, level='tbin' )
-                                texpdict[band]['by_min_snr'][gentype][snr][t] = [ list( tdf.index.values ),
-                                                                                  list( tdf.values ) ]
-                hist['tiers'][tier][texpose] = texpdict                
+                hist['tiers'][tier][prism] = prismdict
 
         return hist
 
@@ -553,7 +468,7 @@ class RomanSurveySummary:
         # Read the INP file
 
         surveyinfo, instrinfo, analysisinfo, tiers = self._read_inp_file( inputfile )
-        
+
         sndatabasename = f"{analysisinfo['SIM']['PREFIX']}_DATA"
 
         # Make sure an assumption I'm going to make is true, that the
@@ -582,7 +497,7 @@ class RomanSurveySummary:
                     surveys[simlibbasename] = self._read_simlib_doc( snana_outdir, simlibbasename, tiers )
                     ( gentypemap, zhist, snrmaxzhist,
                       snrmax2zhist, snrmax3zhist ) = self._read_dump( collection, sndatabasename, simlibbasename )
-                    spechists = self._read_spec( collection, sndatabasename, simlibbasename )
+                    spechists = self._read_spec( collection, sndatabasename, simlibbasename, tiers )
                     surveys[simlibbasename]['gentypemap'] = gentypemap
                     surveys[simlibbasename]['zhist'] = zhist
                     surveys[simlibbasename]['snrmaxzhist'] = snrmaxzhist
@@ -591,7 +506,7 @@ class RomanSurveySummary:
                     surveys[simlibbasename]['spechists'] = spechists
 
         # TODO : verify that the texpose in spechists match what is in surveyinfo
-                    
+
         # Get the cosmology and figure of merit from the BBC files
 
         _logger.debug( "Reading BBC_SUMMARY_wfit.FITRES" )
