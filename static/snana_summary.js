@@ -512,7 +512,7 @@ snanasum.Collection.prototype.showSim = function( sim ) {
     }
 
     p = rkWebUtil.elemaker( "p", this.infodiv,
-                            { "text": "Statistics above include the low-z survey.  Numbers below " +
+                            { "text": "FoM includes the low-z survey.  Numbers below " +
                                       "are only from Roman.",
                               "classes": [ "bold" ] } );
 
