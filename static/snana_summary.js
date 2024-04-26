@@ -420,7 +420,7 @@ snanasum.Collection.prototype.showSim = function( sim ) {
     rkWebUtil.wipeDiv( this.infodiv );
 
     p = rkWebUtil.elemaker( "p", this.infodiv,
-                            { "text": "Warning: core-collapse SNe, AGN, and SLSN numbers are not scaled right.",
+                            { "text": "Core-collapse SNe, AGN, and SLSN numbers _should_ now be scaled right.",
                               "classes": [ "italic" ] } );
 
     div = rkWebUtil.elemaker( "div", this.infodiv, { "classes": [ "zhist-img-container" ] } );
