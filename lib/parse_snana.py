@@ -132,6 +132,19 @@ class RomanSurveySummary:
             analysisinfo['muopt'].append( { 'name': muname,
                                             'idsurvey_select': int( match.group('surveyid') ) } )
 
+
+        # Parse the prescale transient list
+
+        analysisinfo[ 'prescales' ] = {}
+        for scaleinfo in analysisinfo['SIM']['PRESCALE_TRANSIENT_LIST']:
+            match = re.search('^ *([^/]+)/(.*)$', scaleinfo )
+            if match is None:
+                raise ValueError( f"Failed to parse prescale string {scaleinfo}" )
+            analysisinfo[ 'prescales' ][ match.group(1) ] = float( match.group(2) )
+
+        # WARNING HACK ALERT to deal with an inconsistency in snana output
+        analysisinfo[ 'prescales' ][ 'IIP+IIL' ] = analysisinfo[ 'prescales' ][ 'IIL' ]
+
         return surveyinfo, instrinfo, analysisinfo, tiers, filemap
 
 
@@ -193,7 +206,7 @@ class RomanSurveySummary:
 
         return surveyinfo
 
-    def _gen_zhists( self, dumpfilepath, gentypes ):
+    def _gen_zhists( self, dumpfilepath, gentypemap, prescales ):
 
         # TODO : scaling CC by 10 (or whatever)
 
@@ -220,7 +233,10 @@ class RomanSurveySummary:
             fielddf = dumpdf[ dumpdf['FIELD'] == field ]
             for zlow in numpy.arange( 0., 3.1, 0.1 ):
                 sne_at_z = fielddf[ ( fielddf['ZCMB'] >= zlow ) & ( fielddf['ZCMB'] < zlow + 0.1 ) ]
-                for gentype in gentypes:
+                for gentype, gentypestr in gentypemap.items():
+                    prescale = 1.
+                    if gentypestr in prescales.keys():
+                        prescale = float( prescales[gentypestr] )
                     gentypesne = sne_at_z[ sne_at_z['GENTYPE'] == gentype ]
                     hist['tier'].append( field )
                     snrmaxhist['tier'].append( field )
@@ -234,15 +250,15 @@ class RomanSurveySummary:
                     snrmaxhist['zCMB'].append( zlow )
                     snrmax2hist['zCMB'].append( zlow )
                     snrmax3hist['zCMB'].append( zlow )
-                    hist['n'].append( len(gentypesne) )
-                    snrmaxhist['n'].append( len( gentypesne[ gentypesne['SNRMAX'] > self.snrmaxcut ] ) )
-                    snrmax2hist['n'].append( len( gentypesne[ gentypesne['SNRMAX2'] > self.snrmaxcut ] ) )
-                    snrmax3hist['n'].append( len( gentypesne[ gentypesne['SNRMAX3'] > self.snrmaxcut ] ) )
+                    hist['n'].append( prescale * len(gentypesne) )
+                    snrmaxhist['n'].append( prescale * len( gentypesne[ gentypesne['SNRMAX'] > self.snrmaxcut ] ) )
+                    snrmax2hist['n'].append( prescale * len( gentypesne[ gentypesne['SNRMAX2'] > self.snrmaxcut ] ) )
+                    snrmax3hist['n'].append( prescale * len( gentypesne[ gentypesne['SNRMAX3'] > self.snrmaxcut ] ) )
 
         return hist, snrmaxhist, snrmax2hist, snrmax3hist
 
 
-    def _read_dump( self, collection, survey_version ):
+    def _read_dump( self, collection, survey_version, prescales ):
 
         # Find the SNANA output scratch directory
         #  (We know the parent will be the same for all sims)
@@ -297,7 +313,7 @@ class RomanSurveySummary:
 
         dumpfilepath = sndatadir / f'{survey_version}.DUMP'
         ( zhist, snrmaxzhist,
-          snrmax2zhist, snrmax3zhist ) = self._gen_zhists( dumpfilepath, gentypemap.keys() )
+          snrmax2zhist, snrmax3zhist ) = self._gen_zhists( dumpfilepath, gentypemap, prescales )
 
         return gentypemap, zhist, snrmaxzhist, snrmax2zhist, snrmax3zhist
 
@@ -425,7 +441,8 @@ class RomanSurveySummary:
 
                     surveys[short_survey_version] = self._read_simlib_doc( simlib_file, tiers )
                     ( gentypemap, zhist, snrmaxzhist,
-                      snrmax2zhist, snrmax3zhist ) = self._read_dump( collection, survey_version )
+                      snrmax2zhist, snrmax3zhist ) = self._read_dump( collection, survey_version,
+                                                                      analysisinfo['prescales'] )
                     surveys[short_survey_version]['gentypemap'] = gentypemap
                     surveys[short_survey_version]['zhist'] = zhist
                     surveys[short_survey_version]['snrmaxzhist'] = snrmaxzhist
