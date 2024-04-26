@@ -31,13 +31,13 @@ class RomanSurveySummary:
     known_filters = ['R', 'Z', 'Y', 'J', 'H', 'F', 'K']
     surveynameparse = re.compile( '^(.*)\.SIMLIB(\.gz)?' )
 
-    def __init__( self, outdir, searchdir=None, snrmaxcut=5. ):
+    def __init__( self, outdir, searchdir=None, snana_simdir=None, snrmaxcut=5. ):
         self.outdir = pathlib.Path( outdir )
         self.collections = {}
         self.snana_scratchdir = {}
         self.snrmaxcut = snrmaxcut
-        if searchdir is not None:
-            self.read_all_outputs_in( searchdir )
+        self.snana_simdir = None if snana_simdir is None else pathlib.Path( snana_simdir )
+        self.searchdir = None if searchdir is None else pathlib.Path( searchdir )
 
     def _read_inp_files( self, snana_outdir ):
         files = [ f for f in snana_outdir.glob( "INP*" ) ]
@@ -264,28 +264,31 @@ class RomanSurveySummary:
         #  (We know the parent will be the same for all sims)
 
         if collection not in self.snana_scratchdir.keys():
-            _logger.debug( f"Running snana.exe GETINFO {survey_version} to find "
-                           f"SNANA data dir" )
-            retries = 5
-            while retries > 0:
-                try:
-                    res = subprocess.run( [ 'snana.exe', 'GETINFO', survey_version ],
-                                          capture_output=True, timeout=30 )
-                    if len( res.stderr ) > 0:
-                        raise RuntimeError( f"Failed to run snana.exe: {res.stderr}" )
-                    retries = 0
-                except subprocess.TimeoutExpired as ex:
-                    if retries > 0:
-                        _logger.warning( f"snana.exe run timed out, trying again" )
-                    else:
-                        _logger.error( f"snana.exe run timed out repeatedly, dying" )
-                        raise RuntimeError( f"snana.exe run timed out repeatedly, dying" )
-                    retries -= 1
-            for line in res.stdout.decode( "utf-8" ).split("\n"):
-                if line[0:12] == 'SNDATA_PATH:':
-                    self.snana_scratchdir[collection] = pathlib.Path( line.split()[1] ).parent
-                    break
-            _logger.debug( f"...done running snana.exe" )
+            if self.snana_simdir is not None:
+                self.snana_scratchdir[ collection ] = self.snana_simdir
+            else:
+                _logger.debug( f"Running snana.exe GETINFO {survey_version} to find "
+                               f"SNANA data dir" )
+                retries = 5
+                while retries > 0:
+                    try:
+                        res = subprocess.run( [ 'snana.exe', 'GETINFO', survey_version ],
+                                              capture_output=True, timeout=30 )
+                        if len( res.stderr ) > 0:
+                            raise RuntimeError( f"Failed to run snana.exe: {res.stderr}" )
+                        retries = 0
+                    except subprocess.TimeoutExpired as ex:
+                        if retries > 0:
+                            _logger.warning( f"snana.exe run timed out, trying again" )
+                        else:
+                            _logger.error( f"snana.exe run timed out repeatedly, dying" )
+                            raise RuntimeError( f"snana.exe run timed out repeatedly, dying" )
+                        retries -= 1
+                for line in res.stdout.decode( "utf-8" ).split("\n"):
+                    if line[0:12] == 'SNDATA_PATH:':
+                        self.snana_scratchdir[collection] = pathlib.Path( line.split()[1] ).parent
+                        break
+                _logger.debug( f"...done running snana.exe" )
 
         if collection not in self.snana_scratchdir.keys():
             raise RuntimeError( f"Failed to find snana_scratchdir for {collection}" )
@@ -423,7 +426,7 @@ class RomanSurveySummary:
         for ai, relarea in enumerate( tiers[0]['relarea'] ):
             for ti, dt_visit in enumerate( tiers[0]['dt_visit'] ):
                 for zi, z_snrmatch in enumerate( tiers[0]['z_snrmatch'] ):
-                    subdf = filemap.xs( [ ai, ti, zi ], level=['i_AREA', 'i_TEXPOSE', 'i_zSNRMAX' ] )
+                    subdf = filemap.xs( ( ai, ti, zi ), level=( 'i_AREA', 'i_TEXPOSE', 'i_zSNRMAX' ) )
                     if len(subdf) != 1:
                         _logger.error( "Bad things have happened." )
                         import pdb; pdb.set_trace()
@@ -496,8 +499,24 @@ class RomanSurveySummary:
                 with open( self.outdir / f'{collection}_{attr}.json', 'w' ) as ofp:
                     json.dump( self.collections[collection][attr], ofp, cls=NumpyEncoder )
 
-    def read_all_outputs_in( self, searchdir ):
-        raise NotImplementedError( "read_all_outputs_in() not implemented" )
+    def process_searchdir( self ):
+        if self.searchdir is None:
+            raise ValueError( "Can't process_searchdir : no searchdir was given to RomanSurveySummary constructor." )
+
+        outputparse = re.compile( "^output_?(.*)$" )
+
+        _logger.info( f"Looking for collections in {self.searchdir}" )
+        for direc in self.searchdir.glob( "output*" ):
+            match = outputparse.search( direc.name )
+            if match is None:
+                raise RuntimeError( f"Failed to parse {direc.name} for output_?(.*)" )
+            surveyname = match.group(1)
+
+            _logger.info( f"Working on collection {surveyanme}" )
+            self.read_files( surveyname, direc )
+
+        _logger.info( f"All done with collecitons in {self.searchdir}" )
+
 
 # ======================================================================
 
@@ -507,23 +526,33 @@ def main():
                                       formatter_class=argparse.ArgumentDefaultsHelpFormatter )
     parser.add_argument( "-v", "--verbose", action='store_true', default=False, help="Show debug info" )
     parser.add_argument( "-o", "--outdir", default=".", help="Output directory for pkl files" )
-    parser.add_argument( "-s", "--snana_outdirs", nargs='+', help="SNANA output directories to read" )
+    parser.add_argument( "-p", "--campaign-pipeline-dir",
+                         help=( "The SNANA campaign directory; under this directory, each subdirectory "
+                                "named output_* is a single collection within the campaign, has an "
+                                "ANALYSIS_INSTRUCTIONS.README file, and OUTPUT[123]* files" ) )
+    parser.add_argument( "-s", "--snana-simdir",
+                         help=( "The SNANA sim directory; this holds all of the SNANA SIMS for the "
+                                "campaign in --campaign-pipeline-dir.  In this directory are "
+                                "subdirectories corresponding to all of the versions found in all of the"
+                                ".../OUTPUT2*/MERGE.LOG files under campaign-pipeline-dir." ) )
     args = parser.parse_args()
 
     if args.verbose:
         _logger.setLevel( logging.DEBUG )
 
-    ss = RomanSurveySummary( args.outdir )
-    for snanadir in args.snana_outdirs:
-        inpfile = pathlib.Path( snanadir )
-        if inpfile.name[0:7] == 'output_':
-            survey_name = inpfile.name[7:]
-        else:
-            survey_name = inpfile
-        _logger.info( f"Reading survey {survey_name} from {inpfile}..." )
-        ss.read_files( survey_name, inpfile  )
+    ss = RomanSurveySummary( args.outdir, searchdir=args.campaign_pipeline_dir, snana_simdir=args.snana_simdir )
+    ss.process_searchdir()
 
-    _logger.info( f"Done." )
+    # for snanadir in args.snana_outdirs:
+    #     inpfile = pathlib.Path( snanadir )
+    #     if inpfile.name[0:7] == 'output_':
+    #         survey_name = inpfile.name[7:]
+    #     else:
+    #         survey_name = inpfile
+    #     _logger.info( f"Reading survey {survey_name} from {inpfile}..." )
+    #     ss.read_files( survey_name, inpfile  )
+
+    # _logger.info( f"Done." )
 
 
 if __name__ == "__main__":
