@@ -115,6 +115,7 @@ snanasum.Collection = function( collection, maindiv )
     this.tierlist = null;
     this.sortkeys = null;
     this.shown_hist_sim = null;
+    this.simtable_hidecolumns = [];
 };
 
 snanasum.Collection.prototype.renderpage = function()
@@ -234,6 +235,30 @@ snanasum.Collection.prototype.actually_renderpage = function( data )
     }
     this.which_tier_sort.addEventListener( "change", function() { self.changeSortTier() } );
 
+    p = rkWebUtil.elemaker( "p", this.tabdiv );
+    this.show_hide_column_button = rkWebUtil.elemaker( "a", p,
+                                                       { "text": "Show",
+                                                         "classes": [ "link" ],
+                                                         "click": function() {
+                                                             let text, vispull, visadd;
+                                                             if ( self.show_hide_column_button.textContent
+                                                                  == "Hide" ) {
+                                                                 text = "Show";
+                                                                 vispull = "showcolumn";
+                                                                 visadd = "hidecolumn";
+                                                             } else {
+                                                                 text = "Hide";
+                                                                 vispull = "hidecolumn";
+                                                                 visadd = "showcolumn";
+                                                             }
+                                                             self.show_hide_column_button.textContent = text;
+                                                             for ( let i of self.simtable_hidecolumns ) {
+                                                                 i.classList.remove( vispull );
+                                                                 i.classList.add( visadd );
+                                                             }
+                                                         } } );
+    p.appendChild( document.createTextNode( " detail columns" ) );
+
     this.sim_table = rkWebUtil.elemaker( "table", this.tabdiv );
 
     this.render_sim_table( );
@@ -297,51 +322,10 @@ snanasum.Collection.prototype.render_sim_table = function() {
 
     var table, tr, th, td, p;
 
+    this.simtable_hidecolumns = [];
+
     tr = rkWebUtil.elemaker( "tr", this.sim_table );
     th = rkWebUtil.elemaker( "th", tr, { "text": "Sim" } );
-    th = rkWebUtil.elemaker( "th", tr, { "text": "Tier" } );
-
-    th = rkWebUtil.elemaker( "th", tr, { "text": "z" } );
-    rkWebUtil.elemaker( "span", th, { "text": "▲", "classes": [ "link" ],
-                                      "click": function() { self.addSortKey( "zSNRMATCH", 1 ) } } );
-    rkWebUtil.elemaker( "span", th, { "text": "▼", "classes": [ "link" ],
-                                      "click": function() { self.addSortKey( "zSNRMATCH", -1 ) } } );
-    rkWebUtil.elemaker( "br", th );
-    rkWebUtil.elemaker( "text", th, { "text": "targ" } );
-
-    th = rkWebUtil.elemaker( "th", tr, { "text": "Bands" } );
-    rkWebUtil.elemaker( "span", th, { "text": "▲", "classes": [ "link" ],
-                                      "click": function() { self.addSortKey( "filters", 1 ) } } );
-    rkWebUtil.elemaker( "span", th, { "text": "▼", "classes": [ "link" ],
-                                      "click": function() { self.addSortKey( "filters", -1 ) } } );
-
-    th = rkWebUtil.elemaker( "th", tr, { "text": "Area" } );
-    rkWebUtil.elemaker( "span", th, { "text": "▲", "classes": [ "link" ],
-                                      "click": function() { self.addSortKey( "area", 1 ) } } );
-    rkWebUtil.elemaker( "span", th, { "text": "▼", "classes": [ "link" ],
-                                      "click": function() { self.addSortKey( "area", -1 ) } } );
-    rkWebUtil.elemaker( "br", th );
-    rkWebUtil.elemaker( "text", th, { "text": "□°" } );
-
-    th = rkWebUtil.elemaker( "th", tr, { "text": "ntile" } );
-    rkWebUtil.elemaker( "span", th, { "text": "▲", "classes": [ "link" ],
-                                      "click": function() { self.addSortKey( "ntile", 1 ) } } );
-    rkWebUtil.elemaker( "span", th, { "text": "▼", "classes": [ "link" ],
-                                      "click": function() { self.addSortKey( "ntile", -1 ) } } );
-
-    th = rkWebUtil.elemaker( "th", tr, { "text": "nvisit" } );
-    rkWebUtil.elemaker( "span", th, { "text": "▲", "classes": [ "link" ],
-                                      "click": function() { self.addSortKey( "nvisit", 1 ) } } );
-    rkWebUtil.elemaker( "span", th, { "text": "▼", "classes": [ "link" ],
-                                      "click": function() { self.addSortKey( "nvisit", -1 ) } } );
-
-    th = rkWebUtil.elemaker( "th", tr, { "text": "dt" } );
-    rkWebUtil.elemaker( "span", th, { "text": "▲", "classes": [ "link" ],
-                                      "click": function() { self.addSortKey( "dt_visit", 1 ) } } );
-    rkWebUtil.elemaker( "span", th, { "text": "▼", "classes": [ "link" ],
-                                      "click": function() { self.addSortKey( "dt_visit", -1 ) } } );
-    rkWebUtil.elemaker( "br", th );
-    rkWebUtil.elemaker( "text", th, { "text": "(days)" } );
 
     th = rkWebUtil.elemaker( "th", tr, { "text": "FoM" } );
     rkWebUtil.elemaker( "span", th, { "text": "▲", "classes": [ "link" ],
@@ -350,6 +334,65 @@ snanasum.Collection.prototype.render_sim_table = function() {
                                       "click": function() { self.addSortKey( "FoM_stat", -1 ) } } );
     rkWebUtil.elemaker( "br", th );
     rkWebUtil.elemaker( "text", th, { "text": "(stat)" } );
+
+    th = rkWebUtil.elemaker( "th", tr, { "text": "Tier  " } );
+
+    // this.show_hide_img = rkWebUtil.elemaker( "img", th,
+    //                                          { "attributes":
+    //                                            { "src": "static/eyeline.svg",
+    //                                              "alt": "s/h",
+    //                                              "style": "width: 1em; height: 1em" } } );
+
+    th = rkWebUtil.elemaker( "th", tr, { "text": "z" } );
+    rkWebUtil.elemaker( "span", th, { "text": "▲", "classes": [ "link" ],
+                                      "click": function() { self.addSortKey( "zSNRMATCH", 1 ) } } );
+    rkWebUtil.elemaker( "span", th, { "text": "▼", "classes": [ "link" ],
+                                      "click": function() { self.addSortKey( "zSNRMATCH", -1 ) } } );
+    rkWebUtil.elemaker( "br", th );
+    rkWebUtil.elemaker( "text", th, { "text": "targ" } );
+    this.simtable_hidecolumns.push( th );
+
+    th = rkWebUtil.elemaker( "th", tr, { "text": "Bands" } );
+    rkWebUtil.elemaker( "span", th, { "text": "▲", "classes": [ "link" ],
+                                      "click": function() { self.addSortKey( "filters", 1 ) } } );
+    rkWebUtil.elemaker( "span", th, { "text": "▼", "classes": [ "link" ],
+                                      "click": function() { self.addSortKey( "filters", -1 ) } } );
+    this.simtable_hidecolumns.push( th );
+
+    th = rkWebUtil.elemaker( "th", tr, { "text": "Area" } );
+    rkWebUtil.elemaker( "br", th );
+    rkWebUtil.elemaker( "text", th, { "text": "□° " } );
+    rkWebUtil.elemaker( "span", th, { "text": "▲", "classes": [ "link" ],
+                                      "click": function() { self.addSortKey( "area", 1 ) } } );
+    rkWebUtil.elemaker( "span", th, { "text": "▼", "classes": [ "link" ],
+                                      "click": function() { self.addSortKey( "area", -1 ) } } );
+    this.simtable_hidecolumns.push( th );
+
+    th = rkWebUtil.elemaker( "th", tr, { "text": "ntile" } );
+    rkWebUtil.elemaker( "br", th );
+    rkWebUtil.elemaker( "span", th, { "text": "▲", "classes": [ "link" ],
+                                      "click": function() { self.addSortKey( "ntile", 1 ) } } );
+    rkWebUtil.elemaker( "span", th, { "text": "▼", "classes": [ "link" ],
+                                      "click": function() { self.addSortKey( "ntile", -1 ) } } );
+    this.simtable_hidecolumns.push( th );
+
+    th = rkWebUtil.elemaker( "th", tr, { "text": "nvisit" } );
+    rkWebUtil.elemaker( "br", th );
+    rkWebUtil.elemaker( "span", th, { "text": "▲", "classes": [ "link" ],
+                                      "click": function() { self.addSortKey( "nvisit", 1 ) } } );
+    rkWebUtil.elemaker( "span", th, { "text": "▼", "classes": [ "link" ],
+                                      "click": function() { self.addSortKey( "nvisit", -1 ) } } );
+    this.simtable_hidecolumns.push( th );
+
+    th = rkWebUtil.elemaker( "th", tr, { "text": "dt" } );
+    rkWebUtil.elemaker( "span", th, { "text": "▲", "classes": [ "link" ],
+                                      "click": function() { self.addSortKey( "dt_visit", 1 ) } } );
+    rkWebUtil.elemaker( "span", th, { "text": "▼", "classes": [ "link" ],
+                                      "click": function() { self.addSortKey( "dt_visit", -1 ) } } );
+    rkWebUtil.elemaker( "br", th );
+    rkWebUtil.elemaker( "text", th, { "text": "(days)" } );
+    this.simtable_hidecolumns.push( th );
+
 
     let whichcolor = 0;
     for ( let sim of this.surveylist ) {
@@ -364,28 +407,34 @@ snanasum.Collection.prototype.render_sim_table = function() {
                 let textnode = rkWebUtil.elemaker( "span", td, { "text": sim,
                                                                  "classes": [ "link" ],
                                                                  "click": function(e) { self.showSim(sim); } } );
+                // WARNING: hardcoding muopt 0
+                td = rkWebUtil.elemaker( "td", tr, { "text": survey.muopt[0].FoM_stat,
+                                                     "attributes": { "rowspan": Object.keys(survey.tiers).length }
+                                                   } );
                 whichcolor = 1 - whichcolor;
+                firstofsim = false;
             }
             let cls = (whichcolor == 1) ? "lotsfaded" : "mostfaded";
             tr.classList.add( cls );
             td = rkWebUtil.elemaker( "td", tr, { "text": tier } );
             td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].zSNRMATCH } );
+            this.simtable_hidecolumns.push( td );
 
             td = rkWebUtil.elemaker( "td", tr, { "text": this.get_filter_str( sim, tier ) } );
+            this.simtable_hidecolumns.push( td );
             td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].area } );
+            this.simtable_hidecolumns.push( td );
             td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].ntile } );
+            this.simtable_hidecolumns.push( td );
             td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].nvisit } );
+            this.simtable_hidecolumns.push( td );
             td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].dt_visit } );
+            this.simtable_hidecolumns.push( td );
 
-            // WARNING : hardcoding muopt[0]
-            if ( firstofsim ) {
-                firstofsim = false;
-                td = rkWebUtil.elemaker( "td", tr, { "text": survey.muopt[0].FoM_stat,
-                                                     "attributes": { "rowspan": Object.keys(survey.tiers).length }
-                                                   } );
-            }
         }
     }
+
+    for ( let i of this.simtable_hidecolumns ) i.classList.add( "hidecolumn" );
 };
 
 snanasum.Collection.prototype.changeSortTier = function() {
@@ -477,6 +526,8 @@ snanasum.Collection.prototype.showSim = function( sim ) {
     rkWebUtil.elemaker( "th", trntile, { "text": "ntile" } );
     let trnvisit = rkWebUtil.elemaker( "tr", table );
     rkWebUtil.elemaker( "th", trnvisit, { "text": "nvisit" } );
+    let trdtvisit = rkWebUtil.elemaker( "tr", table );
+    rkWebUtil.elemaker( "th", trdtvisit, { "text": "dt_visit (d)" } );
     let trarea = rkWebUtil.elemaker( "tr", table );
     rkWebUtil.elemaker( "th", trarea, { "text": "Area" } );
     let trzsn = rkWebUtil.elemaker( "tr", table );
@@ -490,6 +541,7 @@ snanasum.Collection.prototype.showSim = function( sim ) {
         td = rkWebUtil.elemaker( "th", trtiers, { "text": tier } );
         td = rkWebUtil.elemaker( "td", trntile, { "text": tierinfo.ntile } );
         td = rkWebUtil.elemaker( "td", trnvisit, { "text": tierinfo.nvisit } );
+        td = rkWebUtil.elemaker( "td", trdtvisit, { "text": tierinfo.dt_visit } );
         td = rkWebUtil.elemaker( "td", trarea, { "text": tierinfo.area } );
         td = rkWebUtil.elemaker( "td", trzsn, { "text": tierinfo.zSNRMATCH } );
         td = rkWebUtil.elemaker( "td", tropenfrac, { "text": tierinfo.OpenFrac } );
@@ -566,8 +618,10 @@ snanasum.Collection.prototype.showSim = function( sim ) {
                                  "i=" + i + ", z_" + gt0 + "=" +z + ", z_" + gentype + "=" +
                                  tier_gentype_zs_ns[tier][gentype].z[i] );
                 }
-                td = rkWebUtil.elemaker( "td", tr,
-                                         { "text": tier_gentype_zs_ns[tier][gentype].n[i] } );
+                let n = tier_gentype_zs_ns[tier][gentype].n[i];
+                let nstr;
+                if ( n % 1 != 0 ) nstr = n.toFixed(1); else nstr = n;
+                td = rkWebUtil.elemaker( "td", tr, { "text": nstr } );
             }
         }
     }
