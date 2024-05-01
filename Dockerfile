@@ -47,6 +47,7 @@ WORKDIR /code
 COPY webservice.py webservice.py
 COPY static/*.js /code/static/
 COPY static/*.css /code/static/
+COPY static/*.svg /code/static/
 COPY rkwebutil/rkwebutil.js /code/static/rkwebutil.js
 COPY templates/*.html /code/templates/
 
