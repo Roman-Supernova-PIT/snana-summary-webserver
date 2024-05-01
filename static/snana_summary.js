@@ -1,4 +1,5 @@
 import { rkWebUtil } from "./rkwebutil.js";
+import { SVGPlot } from "./svgplot.js";
 
 // Namespace
 
@@ -174,43 +175,18 @@ snanasum.Collection.prototype.actually_renderpage = function( data )
 
     div = rkWebUtil.elemaker( "div", this.contentdiv, { "classes": [ "main_hbox" ] } );
     this.tabdiv = rkWebUtil.elemaker( "div", div, { "classes": [ "tabdiv" ] } );
+
     this.metainfodiv = rkWebUtil.elemaker( "div", div, { "classes": [ "metainfodiv" ] } );
+    this.tabber = new rkWebUtil.Tabbed( this.metainfodiv );
 
-    p = rkWebUtil.elemaker( "p", this.metainfodiv, { "text": "Histogram for " } );
+    this.histdiv = rkWebUtil.elemaker( "div", null );
+    this.tabber.addTab( "hists", "Photometry Summary", this.histdiv, true );
+    this.ltcvdiv = rkWebUtil.elemaker( "div", null );
+    this.tabber.addTab( "ltcvs", "Lightcurves", this.ltcvdiv, false );
 
-    this.infodiv = rkWebUtil.elemaker( "div", this.metainfodiv, { "classes": [ "infodiv" ] } );
+    this.render_hist_div();
+    this.render_ltcv_div();
 
-    let tmpsurvey = this.surveys[ this.surveylist[0] ];
-    this.hist_tier_dropdown = rkWebUtil.elemaker( "select", p,
-                                                  { "change": ( function() {
-                                                      self.showSim( self.shown_hist_sim );
-                                                  } ) } );
-    rkWebUtil.elemaker( "option", this.hist_tier_dropdown, { "text": "All Tiers",
-                                                             "attributes": { "value": "__ALL__",
-                                                                             "selected": "selected" } } );
-    for ( let tier of Object.keys( tmpsurvey['tiers'] ) ) {
-        rkWebUtil.elemaker( "option", this.hist_tier_dropdown, { "text": tier,
-                                                                 "attributes": { "value": tier } } )
-    }
-    this.hist_gentype_dropdown = rkWebUtil.elemaker( "select", p,
-                                                     { "change": ( function() {
-                                                         self.showSim( self.shown_hist_sim );
-                                                     } ) } );
-    this.update_hist_gentype_dropdown( null, 10 );
-
-    this.sncut_dropdown = rkWebUtil.elemaker( "select", p,
-                                              { "change": ( function() {
-                                                  self.showSim( self.shown_hist_sim );
-                                              } ) } );
-    rkWebUtil.elemaker( "option", this.sncut_dropdown, { "text": "All detections",
-                                                         "attributes": { "value": "zhist",
-                                                                         "selected": "selected" } } );
-    rkWebUtil.elemaker( "option", this.sncut_dropdown, { "text": "Highest S/N band S/N>5",
-                                                         "attributes": { "value": "snrmaxzhist" } } );
-    rkWebUtil.elemaker( "option", this.sncut_dropdown, { "text": "2nd highest S/N color S/N>5",
-                                                         "attributes": { "value": "snrmax2zhist" } } );
-    rkWebUtil.elemaker( "option", this.sncut_dropdown, { "text": "3rd highest S/N color S/N>5",
-                                                         "attributes": { "value": "snrmax3zhist" } } );
 
     if ( this.sortkeys == null ) {
         this.sortkeys = [ "FoM_stat" ];
@@ -284,6 +260,22 @@ snanasum.Collection.prototype.update_hist_gentype_dropdown = function( sim=null,
         if ( curval == gentype ) option.setAttribute( "selected", "selected" );
     }
 }
+
+snanasum.Collection.prototype.update_ltcv_type_wid = function( sim=null, curval=null )
+{
+    let option;
+
+    if ( sim == null ) sim = this.surveylist[0];
+    if ( curval == null ) curval = this.ltcv_type_wid.values;
+    rkWebUtil.wipeDiv( this.ltcv_type_wid );
+    for ( let gentype of Object.keys( this.surveys[sim].gentypemap ) ) {
+        option = rkWebUtil.elemaker( "option", this.ltcv_type_wid,
+                                     { "text": this.surveys[sim].gentypemap[gentype],
+                                       "attributes": { "value": gentype } } );
+        if ( curval == gentype ) option.setAttribute( "selected", "selected" );
+    }
+}
+
 
 snanasum.Collection.prototype.render_sim_table = function() {
     var self = this;
@@ -435,6 +427,8 @@ snanasum.Collection.prototype.render_sim_table = function() {
     }
 
     for ( let i of this.simtable_hidecolumns ) i.classList.add( "hidecolumn" );
+
+    this.showSim( this.surveylist[0] );
 };
 
 snanasum.Collection.prototype.changeSortTier = function() {
@@ -457,6 +451,204 @@ snanasum.Collection.prototype.addSortKey = function( sortkey, order ) {
 };
 
 
+snanasum.Collection.prototype.render_hist_div = function()
+{
+    let self = this;
+
+    let p = rkWebUtil.elemaker( "p", this.histdiv, { "text": "Histogram for " } );
+
+    this.infodiv = rkWebUtil.elemaker( "div", this.histdiv, { "classes": [ "infodiv" ] } );
+
+    let tmpsurvey = this.surveys[ this.surveylist[0] ];
+    this.hist_tier_dropdown = rkWebUtil.elemaker( "select", p,
+                                                  { "change": ( function() {
+                                                      self.showSim( self.shown_hist_sim );
+                                                  } ) } );
+    rkWebUtil.elemaker( "option", this.hist_tier_dropdown, { "text": "All Tiers",
+                                                             "attributes": { "value": "__ALL__",
+                                                                             "selected": "selected" } } );
+    for ( let tier of Object.keys( tmpsurvey['tiers'] ) ) {
+        rkWebUtil.elemaker( "option", this.hist_tier_dropdown, { "text": tier,
+                                                                 "attributes": { "value": tier } } )
+    }
+    this.hist_gentype_dropdown = rkWebUtil.elemaker( "select", p,
+                                                     { "change": ( function() {
+                                                         self.showSim( self.shown_hist_sim );
+                                                     } ) } );
+    this.update_hist_gentype_dropdown( null, 10 );
+
+    this.sncut_dropdown = rkWebUtil.elemaker( "select", p,
+                                              { "change": ( function() {
+                                                  self.showSim( self.shown_hist_sim );
+                                              } ) } );
+    rkWebUtil.elemaker( "option", this.sncut_dropdown, { "text": "All detections",
+                                                         "attributes": { "value": "zhist",
+                                                                         "selected": "selected" } } );
+    rkWebUtil.elemaker( "option", this.sncut_dropdown, { "text": "Highest S/N band S/N>5",
+                                                         "attributes": { "value": "snrmaxzhist" } } );
+    rkWebUtil.elemaker( "option", this.sncut_dropdown, { "text": "2nd highest S/N color S/N>5",
+                                                         "attributes": { "value": "snrmax2zhist" } } );
+    rkWebUtil.elemaker( "option", this.sncut_dropdown, { "text": "3rd highest S/N color S/N>5",
+                                                         "attributes": { "value": "snrmax3zhist" } } );
+}
+
+
+snanasum.Collection.prototype.render_ltcv_div = function()
+{
+    let self = this;
+
+    let p, button;
+
+    p = rkWebUtil.elemaker( "p", this.ltcvdiv );
+    button = rkWebUtil.button( p, "Plot", () => { window.alert( "Individual objects not yet implemented" ) } );
+    rkWebUtil.elemaker( "span", p, { "text": " lightcurve for object # " } );
+    this.ltcv_objnum_wid = rkWebUtil.elemaker( "input", p, { "attributes": { "size": 10 } } );
+
+    p = rkWebUtil.elemaker( "p", this.ltcvdiv );
+    button = rkWebUtil.button( p, "Find and plot", () => { self.plot_random_ltcv() } );
+    rkWebUtil.elemaker( "span", p, { "text": " a lightcurve of type " } );
+    this.ltcv_type_wid = rkWebUtil.elemaker( "select", p );
+    this.update_ltcv_type_wid( null, 10 );
+    rkWebUtil.elemaker( "span", p, { "text": " at z= " } );
+    this.ltcv_z_wid = rkWebUtil.elemaker( "input", p,
+                                          { "attributes":
+                                            { "value": 0.5,
+                                              "size": 5 } } );
+    rkWebUtil.elemaker( "span", p, { "text": "±0.1" } );
+
+    this.ltcv_plot_div = rkWebUtil.elemaker( "div", this.ltcvdiv );
+}
+
+
+snanasum.Collection.prototype.plot_random_ltcv = function()
+{
+    let self = this;
+
+    rkWebUtil.wipeDiv( this.ltcv_plot_div );
+
+    // TODO : reafactor all this code so that it all makes more snese
+    let sim = this.shown_hist_sim;
+    let connector = new rkWebUtil.Connector( "/randomltcv" )
+    let gentype = this.ltcv_type_wid.value;
+    let z = this.ltcv_z_wid.value;
+    connector.sendHttpRequest( "/" + this.collection + "/" + sim + "/" + gentype + "/" + z + "/0.1",
+                               {}, (data) => { self.actually_plot_random_ltcv( data ) } );
+}
+
+snanasum.Collection.prototype.actually_plot_random_ltcv = function( data )
+{
+    let self = this;
+
+    var h3, p;
+
+    let known_filters = ['R', 'Z', 'Y', 'J', 'H', 'F', 'K'];
+    let filt_colors = { 'R' : '#cc00cc',
+                        'Z' : '#0000cc',
+                        'Y' : '#00cccc',
+                        'J' : '#00cc00',
+                        'H' : '#cccc00',
+                        'F' : '#666600',
+                        'K' : '#000000'
+                      };
+    let filt_markers = { 'R' : 'dot',
+                         'Z' : 'circle',
+                         'Y' : 'square',
+                         'J' : 'filledsquare',
+                         'H' : 'diamond',
+                         'F' : 'filleddiamond',
+                         'K' : 'uptriangle'
+                       };
+
+    h3 = rkWebUtil.elemaker( "h3", this.ltcv_plot_div,
+                             { "text": "Obj " + data['snid'] + " at z_cmb=" + data['zcmb'].toFixed(2) } )
+
+    let have_filts = [];
+    for ( let filt of known_filters )
+        if ( data['ltcv'].hasOwnProperty( filt ) )
+            have_filts.push( filt );
+
+    this.ltcv_filt_checkboxes = {}
+    this.ltcv_filt_datasets = {}
+    p = rkWebUtil.elemaker( "p", this.ltcv_plot_div );
+    this.show_ltcv_lines_cb = rkWebUtil.elemaker( "input", p,
+                                                  { "attributes":
+                                                    { "type": "checkbox",
+                                                      "checked": "checked",
+                                                      "id": "show_ltcv_lines_cb"
+                                                    },
+                                                    "change": () => {
+                                                        if ( self.show_ltcv_lines_cb.checked ) {
+                                                            for ( let i in self.ltcv_filt_datasets ) {
+                                                                self.ltcv_filt_datasets[i].linewid = 2;
+                                                            }
+                                                            self.ltcv_svgplot.redraw();
+                                                        }
+                                                        else {
+                                                            for ( let i in self.ltcv_filt_datasets ) {
+                                                                self.ltcv_filt_datasets[i].linewid = 0;
+                                                            }
+                                                            self.ltcv_svgplot.redraw();
+                                                        }
+                                                    }
+                                                  } );
+    rkWebUtil.elemaker( "label", p, { "attributes": { "for": "show_ltcv_lines_cb" },
+                                      "text": "show lines" } );
+    p = rkWebUtil.elemaker( "p", this.ltcv_plot_div );
+    for ( let filt of have_filts ) {
+        let span = rkWebUtil.elemaker( "span", p,
+                                       { "attributes":
+                                         { "style": "color: " + filt_colors[filt] } } )
+        let cb = rkWebUtil.elemaker( "input", span,
+                                     { "attributes":
+                                       { "type": "checkbox",
+                                         "checked": "checked",
+                                         "id": "ltcv_checkbox_band" + filt
+                                       },
+                                       "change": () => {
+                                           if (cb.checked) {
+                                               self.ltcv_svgplot.addDataset( self.ltcv_filt_datasets[filt] );
+                                               self.ltcv_svgplot.redraw();
+                                           }
+                                           else
+                                               self.ltcv_svgplot.removeDataset( self.ltcv_filt_datasets[filt] );
+                                       }
+                                     }
+                                   );
+        let lab = rkWebUtil.elemaker( "label", span, { "attributes": { "for": "ltcv_checkbox_band" + filt },
+                                                    "text": filt + "-band (" + filt_markers[filt] + ")" } );
+        rkWebUtil.elemaker( "br", p );
+
+        let mjds = [];
+        let mags = [];
+        let dmags = [];
+        for ( let i in data['ltcv'][filt]['mjd'] ) {
+            if ( data['ltcv'][filt]['flux'][i] > 0 ) {
+                mjds.push( data['ltcv'][filt]['mjd'][i] );
+                mags.push( ( -2.5 * Math.log10( data['ltcv'][filt]['flux'][i] ) + data['zp'] ) );
+                dmags.push( 1.0857 * data['ltcv'][filt]['dflux'][i] / data['ltcv'][filt]['flux'][i] );
+            }
+        }
+
+        let ds = new SVGPlot.Dataset( { 'x': mjds, 'y': mags, 'dy': dmags,
+                                        'color': filt_colors[filt], 'highlight_color': '#333333',
+                                        'linewid': 2, 'marker': filt_markers[filt]
+                                      } );
+
+        this.ltcv_filt_datasets[ filt ] = ds;
+    }
+    this.ltcv_have_filts = have_filts;
+
+    this.ltcv_svgplot = new SVGPlot.Plot( { "flipy": true,
+                                            "xtitle": "MJD",
+                                            "ytitle": "Magnitude"
+                                          } );
+    this.ltcv_plot_div.appendChild( this.ltcv_svgplot.topdiv );
+    for ( let ds in this.ltcv_filt_datasets ) {
+        this.ltcv_svgplot.addDataset( this.ltcv_filt_datasets[ds] );
+    }
+}
+
+
 snanasum.Collection.prototype.showSim = function( sim ) {
     let self = this;
 
@@ -466,7 +658,9 @@ snanasum.Collection.prototype.showSim = function( sim ) {
     if ( this.shown_hist_sim == null ) return;
 
     this.update_hist_gentype_dropdown( sim, null );
+    this.update_ltcv_type_wid( sim, null );
     rkWebUtil.wipeDiv( this.infodiv );
+    rkWebUtil.wipeDiv( this.ltcv_plot_div );
 
     p = rkWebUtil.elemaker( "p", this.infodiv,
                             { "text": "Core-collapse SNe, AGN, and SLSN numbers _should_ now be scaled right.",

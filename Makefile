@@ -2,6 +2,7 @@ INSTALLDIR = test_install
 
 toinstall = webservice.py \
 	static/snana_summary.css static/snana_summary.js static/snana_summary_start.js static/rkwebutil.js \
+	static/svgplot.css static/svgplot.js \
 	templates/base.html templates/snana-summary-root.html
 
 default :
@@ -17,3 +18,8 @@ $(INSTALLDIR)/% : %
 static/rkwebutil.js : rkwebutil/rkwebutil.js
 	ln -s ../rkwebutil/rkwebutil.js static/rkwebutil.js
 
+static/svgplot.css : rkwebutil/svgplot.css
+	ln -s ../rkwebutil/svgplot.css static/svgplot.css
+
+static/svgplot.js : rkwebutil/svgplot.js
+	ln -s ../rkwebutil/svgplot.js static/svgplot.js
