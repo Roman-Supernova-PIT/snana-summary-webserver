@@ -68,11 +68,13 @@ RUN make INSTALLDIR=/code install
 FROM base AS final
 
 COPY --from=build /venv/ /venv/
+ENV PATH=/venv/bin:$PATH
+
 COPY --from=build /code/ /code/
 WORKDIR /code
 
 COPY data /data
 RUN mkdir /snana_sim
 
-CMD [ "/venv/bin/gunicorn", "-w", "4", "-b", "0.0.0.0:8080", "--timeout", "0", \
+CMD [ "gunicorn", "-w", "4", "-b", "0.0.0.0:8080", "--timeout", "0", \
       "webservice:app" ]
