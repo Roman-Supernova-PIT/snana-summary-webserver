@@ -51,6 +51,7 @@ COPY rkwebutil/rkwebutil.js /code/static/rkwebutil.js
 COPY templates/*.html /code/templates/
 
 COPY data /data
+RUN mkdir /snana_sim
 
 CMD [ "gunicorn", "-w", "4", "-b", "0.0.0.0:8080", "--timeout", "0", \
       "webservice:app" ]
