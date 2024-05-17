@@ -3,16 +3,16 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:
-    workload.user.cattle.io/workloadselector: deployment-roman-obsplan-snana-summary-snana-strategy
+    workload.user.cattle.io/workloadselector: deployment-roman-obsplan-snana-summ-snana-strategy
   name: snana-strategy
-  namespace: roman-obsplan-snana-summary
+  namespace: roman-obsplan-snana-summ
 spec:
   progressDeadlineSeconds: 600
   replicas: 1
   revisionHistoryLimit: 10
   selector:
     matchLabels:
-      workload.user.cattle.io/workloadselector: deployment-roman-obsplan-snana-summary-snana-strategy
+      workload.user.cattle.io/workloadselector: deployment-roman-obsplan-snana-summ-snana-strategy
   strategy:
     rollingUpdate:
       maxSurge: 1
@@ -21,7 +21,7 @@ spec:
   template:
     metadata:
       labels:
-        workload.user.cattle.io/workloadselector: deployment-roman-obsplan-snana-summary-snana-strategy
+        workload.user.cattle.io/workloadselector: deployment-roman-obsplan-snana-summ-snana-strategy
     spec:
       containers:
       - image: registry.nersc.gov/m4385/raknop/snana-summary-webserver
@@ -45,14 +45,14 @@ spec:
         tty: true
         volumeMounts:
         - mountPath: /data
-          name: snana-summary-data
+          name: snana-summ-data
           readOnly: true
         - mountPath: /snana_sim
-          name: snana-summary-snana-sim
+          name: snana-summ-snana-sim
           readOnly: true
         # Comment this out to use the code baked into the Dockerfile
         - mountPath: /code
-          name: snana-summary-code
+          name: snana-summ-code
       dnsConfig: {}
       dnsPolicy: ClusterFirst
       restartPolicy: Always
@@ -66,21 +66,21 @@ spec:
       - hostPath:
           path: /global/cfs/cdirs/m4385/survey_strategy_optimization/snana_summary_webserver_data/current
           type: Directory
-        name: snana-summary-data
+        name: snana-summ-data
       - hostPath:
           path: /global/cfs/cdirs/m4385/survey_strategy_optimization/snana_summary_webserver_data/snana_sim/2024-04-16_x420
           type: Directory
-        name: snana-summary-snana-sim
+        name: snana-summ-snana-sim
       - hostPath:
-          path: /global/cfs/cdirs/m4385/survey_strategy_optimization/code/snana-summary-webserver
+          path: /global/cfs/cdirs/m4385/survey_strategy_optimization/code/snana-summary-dev-webserver
           type: Directory
-        name: snana-summary-code
+        name: snana-summ-code
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: snana-strategy
-  namespace: roman-obsplan-snana-summary
+  namespace: roman-obsplan-snana-summ
 spec:
   clusterIP: None
   clusterIPs:
@@ -91,7 +91,7 @@ spec:
     protocol: TCP
     targetPort: 42
   selector:
-    workload.user.cattle.io/workloadselector: deployment-roman-obsplan-snana-summary-snana-strategy
+    workload.user.cattle.io/workloadselector: deployment-roman-obsplan-snana-summ-snana-strategy
   sessionAffinity: None
   type: ClusterIP
 status:
@@ -100,15 +100,15 @@ status:
 apiVersion: v1
 kind: Service
 metadata:
-  name: snana-strategy-ingress
-  namespace: roman-obsplan-snana-summary
+  name: snana-summ-ingress
+  namespace: roman-obsplan-snana-summ
 spec:
   ports:
   - port: 8080
     protocol: TCP
     targetPort: 8080
   selector:
-    workload.user.cattle.io/workloadselector: deployment-roman-obsplan-snana-summary-snana-strategy
+    workload.user.cattle.io/workloadselector: deployment-roman-obsplan-snana-summ-snana-strategy
   sessionAffinity: None
   type: ClusterIP
 status:
@@ -118,29 +118,31 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: snana-strategy
-  namespace: roman-obsplan-snana-summary
+  namespace: roman-obsplan-snana-summ
 spec:
   rules:
-  - host: snana-strategy.roman-obsplan-snana-summary.production.svc.spin.nersc.org
+  - host: snana-strategy.roman-obsplan-snana-summ.development.svc.spin.nersc.org
     http:
       paths:
       - backend:
           service:
-            name: snana-strategy-ingress
+            name: snana-summ-ingress
             port:
               number: 8080
         pathType: ImplementationSpecific
-  - host: roman-snpit-snana-strategy.lbl.gov
+  - host: roman-snpit-snana-strategy-dev.lbl.gov
     http:
       paths:
       - backend:
           service:
-            name: snana-strategy-ingress
+            name: snana-summ-ingress
             port:
               number: 8080
         pathType: ImplementationSpecific
   tls:
+  # - hosts:
+  #   - snana-summ.roman-obsplan-snana-summ.development.svc.spin.nersc.org
   - hosts:
-    - roman-snpit-snana-strategy.lbl.gov
+    - roman-snpit-snana-strategy-dev.lbl.gov
     secretName: snana-strategy-cert
 ---
