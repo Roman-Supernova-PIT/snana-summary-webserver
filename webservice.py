@@ -238,9 +238,9 @@ def snzhist( collection, sim, argstr=None ):
 
 # ======================================================================
 
-@app.route( "/spechist/<string:which>/<string:collection>/<string:sim>/<path:argstr>",
+@app.route( "/spechist/<string:which>/<string:collection>/<string:sim>/<int:strategy>/<path:argstr>",
             methods=['GET','POST'], strict_slashes=False )
-def spechist( which, collection, sim, argstr=None ):
+def spechist( which, collection, sim, strategy, argstr=None ):
     try:
         data = { 'width': 600,
                  'height': 500,
@@ -250,7 +250,6 @@ def spechist( which, collection, sim, argstr=None ):
                  'tbin': None,
                  'magbin': None,
                  'snrbin': None,
-                 'prism': 'P127',
                  'band': 'J'
                 }
         # Oh, look, a copy.  I should have used classes.
@@ -277,38 +276,48 @@ def spechist( which, collection, sim, argstr=None ):
 
         survey = surveys[sim]
         if ( 'spechists' not in surveys[sim] ) or ( len(surveys[sim]['spechists']) == 0 ):
-            return f"Survey doesn't have prism info."
+            return f"Survey doesn't have prism info.", 500
         data['gentypemap'] = survey['gentypemap']
 
         spechists = survey['spechists']
 
-        if data['zbin'] is None:
-            data['zbin'] = 5
+        if ( strategy < 0 ) or ( strategy >= spechists['nspecstrategies'] ):
+            return f"There are {spechists['nspecstrategies']} spectrum stragies; {strategy} is out of range", 500
+
         if data['tbin'] is None:
             data['tbin'] = int( -spechists['tobsmin'] / spechists['deltat'] + 0.5 )
+        if data['snrbin'] is None:
+            data['snrbin'] = int( ( 10. - spechists['snirmin'] ) / spechists['deltasnr'] + 0.5 )
+        if data['zbin'] is None:
+            data['zbin'] = 5
         if data['magbin'] is None:
             data['magbin'] = 5
-        if data['snrbin'] is None:
-            data['snrbin'] = 0
 
-        data['zbin'] = int( data['zbin'] )
-        data['z'] = spechists['zmin'] + data['zbin'] * spechists['deltaz']
         data['tbin'] = int( data['tbin'] )
         data['t'] = spechists['tobsmin'] + data['tbin'] * spechists['deltat']
-        data['magbin'] = int( data['magbin'] )
-        data['mag'] = spechists['mmin'] + data['magbin'] * spechists['deltam']
         data['snrbin'] = int( data['snrbin'] )
         data['snr'] = spechists['snrmin'] + data['snrbin'] * spechists['deltasnr']
+        if ( data['zbin'] == '__all__' ):
+            data['z'] == '(all)';
+        else:
+            data['zbin'] = int( data['zbin'] )
+            data['z'] = spechists['zmin'] + data['zbin'] * spechists['deltaz']
+        if ( data['magbin'] == '__all__' ):
+            data['mag'] = '(all)'
+        else:
+            data['magbin'] = int( data['magbin'] )
+            data['mag'] = spechists['mmin'] + data['magbin'] * spechists['deltam']
 
         if data['tier'] == '__ALL__':
-            data['tier'] = list( spechists['tiers'].keys() )
+            data['tier'] = list( spechists['spectrumhists'][strategy].keys() )
         else:
             data['tier'] = [ data['tier'] ]
 
         # Gentype counting
         gentypes = []
         for tier in data['tier']:
-            df = pandas.DataFrame( spechists['tiers'][tier][data['prism']][data['band']] )
+            df = pandas.DataFrame( spechists['spectrumhists'][strategy][tier][data['band']] )
+            app.logger.debug( f'df.columns={df.columns}' )
             if ( data['gentype'] == '__ALL__' ) or ( data['gentype'] == '__ALLBUTIA__' ):
                 for gentype in df['GENTYPE'].unique():
                     if gentype not in gentypes:
@@ -322,11 +331,12 @@ def spechist( which, collection, sim, argstr=None ):
             gentypes = [ gentype ]
 
         if which == 'mag':
-            return spechist_mag( sim, survey, spechists, gentypes, data, argstr )
+            return spechist_mag( sim, survey, spechists['spectrumhists'][strategy], gentypes, data, argstr )
         elif which == "snr":
-            return spechist_snr( sim, survey, spechists, gentypes, data, argstr )
+            return spechist_snr( sim, survey, spechists['spectrumhists'][strategy], gentypes, data, argstr )
         elif which == "z":
-            return spechist_z( sim, survey, spechists, gentypes, data, argstr )
+            return spechist_z( sim, survey, spechists['spectrumhists'][strategy], gentypes,
+                               spechists['zmin'], spechists['zmax'], spechists['deltaz'], data, argstr )
 
     except Exception as ex:
         sys.stderr.write( f"Exception: {ex}\n" )
@@ -334,7 +344,7 @@ def spechist( which, collection, sim, argstr=None ):
         return flask.abort( 500 )
 
 
-def spechist_z( sim, survey, spechists, gentypes, data, argstr ):
+def spechist_z( sim, survey, spechists, gentypes, zmin, zmax, dz, data, argstr ):
     dpi = 72
     fig = pyplot.figure( figsize=(data['width']/dpi, data['height']/dpi), dpi=dpi, tight_layout=True )
     ax = fig.add_subplot( 1, 1, 1 )
@@ -342,7 +352,7 @@ def spechist_z( sim, survey, spechists, gentypes, data, argstr ):
     # Pandafication
     dfs = {}
     for tier in data['tier']:
-        df = pandas.DataFrame( spechists['tiers'][tier][data['prism']][data['band']] )
+        df = pandas.DataFrame( spechists[tier][data['band']] )
         df = df.loc[ ( df['tbin'] == data['tbin'] ) & ( df['snrbin'] >= data['snrbin'] ),
                      [ 'GENTYPE', 'zbin', 'snrbin', 'n' ] ]
         df = df.groupby( [ 'GENTYPE', 'zbin' ] ).sum()[ 'n' ].reset_index();
@@ -354,7 +364,6 @@ def spechist_z( sim, survey, spechists, gentypes, data, argstr ):
     fig = pyplot.figure( figsize=(data['width']/dpi, data['height']/dpi), dpi=dpi, tight_layout=True )
     ax = fig.add_subplot( 1, 1, 1 )
     totwid = 0.90
-    dz = spechists['deltaz']
     onewid = totwid * dz / nbars
     offset = 0.
     for gentype in gentypes:
@@ -362,7 +371,7 @@ def spechist_z( sim, survey, spechists, gentypes, data, argstr ):
         for tier in data['tier']:
             df = dfs[tier]
             df = df[ df['GENTYPE'] == gentype ]
-            x = spechists['zmin'] + df['zbin'] * spechists['deltaz']
+            x = zmin + df['zbin'] * dz
             y = df['n']
             ax.bar( x + offset, height=y, width=onewid, align='edge',
                     label=f'{tier} {data["gentypemap"][str(gentype)]}' )
@@ -370,12 +379,16 @@ def spechist_z( sim, survey, spechists, gentypes, data, argstr ):
 
     ax.legend( fontsize=12 )
     ax.tick_params( "both", labelsize=12 )
-    ax.set_xlim( spechists['zmin'], spechists['zmax'] )
+    ax.set_xlim( zmin, zmax )
     ax.set_xlabel( r'z_HEL', fontsize=16 )
     ax.set_ylabel( r'N', fontsize=16 )
-    ax.set_title( f'{sim} ; FoM_stat = {survey["muopt"][0]["FoM_stat"]:.1f}\n'
-                  f'{data["prism"]}, band {data["band"]}, '
-                  f't=[{data["t"]:.0f},{data["t"]+spechists["deltat"]:.0f}) d, S/N≥{data["snr"]:.0f}', fontsize=16 )
+    strio = io.StringIO()
+    strio.write( f'{sim} ; FoM_stat = {survey["muopt"][0]["FoM_stat"]:.1f}\nband {data["band"]}' )
+    for tier in spechists.keys():
+        strio.write( f', t_exp({tier})={spechists[tier]["texpose"]}s')
+    # TODO : get Δt below in place of +0.
+    strio.write( f'\nt=[{data["t"]:.0f},{data["t"]+0.:.0f}) d, S/N≥{data["snr"]:.0f}' )
+    ax.set_title( strio.getvalue(), fontsize=16 )
 
     bio = io.BytesIO()
     fig.savefig( bio, format='svg' )
@@ -389,6 +402,8 @@ def spechist_z( sim, survey, spechists, gentypes, data, argstr ):
 
 
 def spechist_mag( sim, survey, spechists, gentypes, data, argstr ):
+    return "magnitude histogram needs to be updated", 500
+
     dpi = 72
     fig = pyplot.figure( figsize=(data['width']/dpi, data['height']/dpi), dpi=dpi, tight_layout=True )
     ax = fig.add_subplot( 1, 1, 1 )
@@ -450,6 +465,8 @@ def spechist_mag( sim, survey, spechists, gentypes, data, argstr ):
 
 
 def spechist_snr( sim, survey, spechists, gentypes, data, argstr ):
+    return "S/N histogram needs to be updated", 500
+
     dpi = 72
     fig = pyplot.figure( figsize=(data['width']/dpi, data['height']/dpi), dpi=dpi, tight_layout=True )
     ax = fig.add_subplot( 1, 1, 1 )
@@ -523,6 +540,7 @@ def randomltcv( collection, sim, gentype, z, dz ):
         app.logger.debug( f"gentype={gentype}, z={z}, dz={dz}" )
 
         simcomps = sim.strip().split()
+        app.logger.debug( f"collection={collection}, sim={sim}" )
         app.logger.debug( f"collection={collection}, sim={sim}, simcomps[1]={simcomps[1]}" )
         subdir = pathlib.Path( "/snana_sim" ) / f'ROMAN_{collection}_DATA-{simcomps[1]}'
         g = [ i for i in subdir.glob( "*.README" ) ]

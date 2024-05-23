@@ -7,6 +7,7 @@
     --some-faded-color: #666666;
     --lots-faded-color: #aaaaaa;
     --most-faded-color: #dddddd;
+    --blue-color: #000088;
 }
 
 body { background: var(--background-color);
@@ -49,6 +50,8 @@ table tr { border: 1px solid black; padding-top: 1ex; padding-bottom: 1ex }
 table tr th { border-bottom: 1px solid black; padding-left: 1em; padding-right: 1em }
 table tr td { border-bottom: 1px solid black; padding-left: 1em; padding-right: 1em }
 table tr td { vertical-align: top }
+
+table tr td.selectedsim { border: 4px solid var(--blue-color); }
 
 .dispinline { display: inline; }
 .dispnone { display: none; }

@@ -20,8 +20,8 @@ _logger.addHandler( _logout )
 _formatter = logging.Formatter( f'[%(asctime)s - %(levelname)s] - %(message)s',
                                 datefmt='%Y-%m-%d %H:%M:%S' )
 _logout.setFormatter( _formatter )
-# _logger.setLevel( logging.INFO )
-_logger.setLevel( logging.DEBUG )
+_logger.setLevel( logging.INFO )
+# _logger.setLevel( logging.DEBUG )
 
 class NumpyEncoder(json.JSONEncoder ):
     def default( self, obj ):
@@ -329,8 +329,7 @@ class RomanSurveySummary:
 
         return hist, snrmaxhist, snrmax2hist, snrmax3hist
 
-    def _read_dump( self, collection, survey_version, prescales ):
-
+    def _get_snana_scratchdir( self, collection ):
         # Find the SNANA output scratch directory
         #  (We know the parent will be the same for all sims in a collection)
 
@@ -364,6 +363,9 @@ class RomanSurveySummary:
         if collection not in self.snana_scratchdir.keys():
             raise RuntimeError( f"Failed to find snana_scratchdir for {collection}" )
 
+    def _read_dump( self, collection, survey_version, prescales ):
+
+        self._get_snana_scratchdir( collection )
         sndatadir = self.snana_scratchdir[collection] / survey_version
 
         # Read the .README file to get the gentype to string type match
@@ -392,22 +394,56 @@ class RomanSurveySummary:
         return gentypemap, zhist, snrmaxzhist, snrmax2zhist, snrmax3zhist
 
 
-    def _read_spec( self, collection, sndatabasename, simlibbasename, tiers ):
+    def _read_spec( self, collection, survey_version, tiers ):
+        """Read spectrum information.
+
+        Returns a dictionary:
+          { 'zmin': float,       # z of left edge of low bin
+            'zmax': float,       # z of ? edge of high bin (gratuitous)
+            'deltaz': float,     # z bin width
+            'tobsmin': float,    # t rel. max in obs. frame of left edge of low bin
+            'tobsmax': float,
+            'deltat': float,
+            'mmin': float,       # magnitude of left edge of low bin
+            'mmax': float,
+            'deltam': float,
+            'snrmin': float,     # S/N of left edge of low bin
+            'snrmax': float,
+            'deltasnr': float,
+            'nspecstrategies': int,    # number of different spectrum strategies
+            'spectrumhists':
+                [ { tier: { 'texpose':   exposure time for this tier
+                            band_1: { 'GENTYPE': int,
+                                      'zbin': int,
+                                      'tbin': int,
+                                      'magbin': int,
+                                      'snrbin': int,
+                                      'n': int,         # of SNe in the relevant bins
+                                    },
+                            band_2: { ... } } } ]
+        }
+
+
+        """
+
         # This one tries to make later summing of histogram seasier.
         # It doesn't fully finish it.
         #
         # Within a tier/texpose, it bins by gentype, z, mag, snr, and t, and sums counts within those bins.
 
-        sndatadir = self._get_snana_sndata_dir( collection, sndatabasename, simlibbasename )
+        self._get_snana_scratchdir( collection )
+        sndatadir = self.snana_scratchdir[collection] / survey_version
 
-        specfile = sndatadir / f'{sndatabasename}_{simlibbasename}.SPEC'
-        _logger.debug( f"Parsing {specfile}" )
-
+        specfile = sndatadir / f'{survey_version}.SPEC'
         if not specfile.is_file():
-            _logger.error( f"Can't find {specfile}, returning empty dict for spectrum info" )
-            return {}
+            specfile = sndatadir / f'{survey_version}.SPEC.gz'
+            if not specfile.is_file():
+                _logger.error( f"Can't find {specfile} (w/ or w/o .gz), returning empty dict for spectrum info" )
+                return {}
 
-        specdf = pandas.read_csv( specfile, delim_whitespace=True, comment='#', skip_blank_lines=True )
+        _logger.debug( f"Parsing {specfile}" )
+        # specdf = pandas.read_csv( specfile, delim_whitespace=True, comment='#', skip_blank_lines=True, compression='infer' )
+        specdf = pandas.read_csv( specfile, sep='\s+', comment='#', skip_blank_lines=True, compression='infer' )
 
         zmin = 0.
         zmax = 3.
@@ -415,7 +451,7 @@ class RomanSurveySummary:
         mmin = 20.
         mmax = 28.
         deltam = 1.
-        snrmin = 3.
+        snrmin = 0.
         snrmax = 20.
         deltasnr = 1.
         tobsmin = -33.
@@ -433,42 +469,55 @@ class RomanSurveySummary:
                  'deltam': deltam,
                  'snrmin': snrmin,
                  'snrmax': snrmax,
-                 'deltasnr': deltasnr,
-                 'tiers': {} }
-        for tier in specdf['FIELD'].unique():
-            _logger.debug( f"Tier {tier}" )
-            hist['tiers'][tier] = {}
-            tierdf = specdf[ specdf['FIELD'] == tier ]
+                 'deltasnr': deltasnr
+                }
 
-            texpmap = {}
-            for tierinfo in tiers:
-                if tier == tierinfo['name']:
-                    texpmap[ int(tierinfo['texpose_prism'][0]) ] = "Prism P127"
-                    texpmap[ int(tierinfo['texpose_prism'][1]) ] = "Grism G150"
+        spectiers = specdf['FIELD'].unique()
+        if set( spectiers ) != set( [ t['name'] for t in tiers ] ):
+            _logger.error( f"Spectroscopic tiers {spectiers} don't match photometric {tiers.keys()}" )
+        ntexpose = -99
+        for info in tiers:
+            tier = info['name']
+            if not isinstance( info['texpose_prism'], list ):
+                _logger.error( f"texpose_prism not a list for tier {tier}!  Not returning spectrum info." )
+                raise RuntimeError( f"texpose_prism not a list for tier {tier}!" )
+                # return {}
+            if ntexpose < 0:
+                ntexpose = len( info['texpose_prism'] )
+            elif len( info['texpose_prism'] ) != ntexpose:
+                raise RuntimeError( f"Inconsistent numbers texpose_prism for {collection} {survey_version}" )
 
-            texpvals = tierdf['TEXPOSE'].unique()
-            if len( texpvals ) != 2:
-                _logger.error( f"{specfile.name} {tier} has != 2 TEXPOSE values" )
-                raise ValueError( f"{specfile.name} {tier} has != 2 TEXPOSE values" )
+        hist[ 'nspecstrategies' ] = ntexpose
 
+        specstrat = []
+        for strati in range(ntexpose):
+            stratdict = {}
 
-            # Note : lots of the int() calls below are because a
-            #  later JSON export is going to fail if dictionary
-            #  keys are numpy.int64
+            for tier in specdf['FIELD'].unique():
+                _logger.debug( f"Spectrum strategy {strati}, tier {tier}" )
+                tiersentry = None
+                for ent in tiers:
+                    if ent['name'] == tier:
+                        tiersentry = ent
+                        break
+                else:
+                    raise RuntimeError( f"Tier {tier} in specdf is not in tiers." )
 
-            for texpose in texpvals:
-                prism = texpmap[ int(texpose) ]
-                _logger.debug( f"texpose {texpose}" )
-                prismdf = tierdf[ tierdf['TEXPOSE'] == texpose ].copy()
-                prismdict = {}
-                prismdf['zbin'] = ( ( prismdf['zHEL'] - zmin ) / deltaz ).apply( int )
-                prismdf['tbin'] = ( ( prismdf['TOBS'] - tobsmin ) / deltat ).apply( int )
+                stratdict[tier] = {}
+                stratdict[tier]['texpose'] = tiersentry['texpose_prism'][strati]
+
+                tierdf = specdf[ ( specdf['FIELD'] == tier )
+                                 & ( specdf['TEXPOSE'] == tiersentry['texpose_prism'][strati] )
+                                ].copy()
+
+                tierdf['zbin'] = ( ( tierdf['zHEL'] - zmin ) / deltaz ).apply( int )
+                tierdf['tbin'] = ( ( tierdf['TOBS'] - tobsmin ) / deltat ).apply( int )
 
                 for band in [ 'Z', 'Y', 'J', 'H' ]:
                     magstr = f'{band}_mag_syn'
                     errstr = f'{band}_magerr_syn'
 
-                    banddf = prismdf[ [ 'GENTYPE', 'zbin', 'tbin', magstr, errstr ] ].copy()
+                    banddf = tierdf[ [ 'GENTYPE', 'zbin', 'tbin', magstr, errstr ] ].copy()
                     banddf['magbin'] = ( ( banddf[magstr] - mmin ) / deltam ).apply(int)
                     banddf['snr'] = 2.5 / ( banddf[errstr] * 2.30258509299405 )
                     banddf.loc[ banddf[errstr] <= 0., 'snr' ] = 0.
@@ -480,11 +529,14 @@ class RomanSurveySummary:
 
                     banddf = banddf.to_frame().reset_index()
                     banddf.rename( { 'snr': 'n' }, axis='columns', inplace=True )
-                    prismdict[band] = banddf.to_dict( 'list' )
 
-                hist['tiers'][tier][prism] = prismdict
+                    stratdict[tier][band] = banddf.to_dict( 'list' )
+            specstrat.append( stratdict )
+
+        hist[ 'spectrumhists' ] = specstrat
 
         return hist
+
 
     def read_files( self, collection, snana_outdir, regen=False, savecache=True, clobber=False ):
         """Load information from a single survey collection.
@@ -527,7 +579,7 @@ class RomanSurveySummary:
                                 'MJD_SEASON': [ { 'season_mjd0': mjd0, 'season_mjd1': mjd1 }, ... ],
                                 'FORCE_SNRMAX': [ { 'snr': snr, 'lam0': lam0, 'lam1': lam1 }, ... ]
                                 'FoM': [ { 'muopt_dex': int, 'muopt': str, 'FoM_stat': float }, ... ]
-             'tiers': dict { 'name': tier name,
+             'tiers': [ { 'name': tier name,
                              'ra': ra,
                              'dec': dec,
                              'bands': list of letters,
@@ -535,7 +587,7 @@ class RomanSurveySummary:
                              'dt_visit': list of floats,
                              'z_snrmatch': list of floats,
                              'texpose_prism': list of ints
-                           }
+                          } ]
              'instrinfo': dict of stuff,
              'analysisinfo': dict with a bunch of keys including
                            'muopt': [ { 'name': str, 'idsurvey_select': int } ]
@@ -549,9 +601,10 @@ class RomanSurveySummary:
                                                       'zSNRMATCH': float,
                                                       'OpenFrac': float,
                                    'zhist': { 'tier': [...], 'gentype': [...], 'zCMB': [...], 'n': [...] },
-                                   'snrmaxzhist': <same structure>
-                                   'snrmaxz2hist': <same structure>
-                                   'snrmaxz3hist': <same structure> } },
+                                   'snrmaxzhist': { <same structure as zhist> },
+                                   'snrmaxz2hist': { <same structure as zhist> },
+                                   'snrmaxz3hist': { <same structure as zhist> {,
+                                   'spechists': { <see _read_spec> },
                                    'gentypemap' : { gentype: name, ... },
                                    'long_survey_version' : <str>,
                                    'muopt': [ { 'name': str,
@@ -622,6 +675,9 @@ class RomanSurveySummary:
                         surveys[short_survey_version]['snrmax2zhist'] = snrmax2zhist
                         surveys[short_survey_version]['snrmax3zhist'] = snrmax3zhist
                         surveys[short_survey_version]['long_survey_version'] = survey_version
+                        surveys[short_survey_version]['spechists'] = self._read_spec( collection,
+                                                                                      survey_version,
+                                                                                      tiers )
                     except Exception as ex:
                         strio = io.StringIO()
                         strio.write( f"Failed to get survey info for {short_survey_version}; Exception: " )
