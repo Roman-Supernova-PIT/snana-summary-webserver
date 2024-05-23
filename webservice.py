@@ -12,17 +12,22 @@ import io
 import re
 import math
 import json
+import yaml
 import pathlib
 import logging
+import random
 import numpy
 import pandas
 
 import flask
 
+from astropy.io import fits
+
 workdir = pathlib.Path( __name__ ).resolve().parent
 
 app = flask.Flask( __name__, instance_relative_config=True )
-app.logger.setLevel( logging.INFO )
+# app.logger.setLevel( logging.INFO )
+app.logger.setLevel( logging.DEBUG )
 
 def pandas_to_dict( df ):
     if df.index.nlevels == 1:
@@ -119,7 +124,7 @@ def snzhist( collection, sim, argstr=None ):
             for arg in argstr.split("/"):
                 match = re.search( '^(?P<k>[^=]+)=(?P<v>.*)$', arg )
                 if match is None:
-                    sys.stderr.write( f"error parsing url argument {arg}, must be key=value" )
+                    app.logger.error( f"error parsing url argument {arg}, must be key=value" )
                     return f'error parsing url argument {arg}, must be key=value', 500
                 kwargs[ match.group('k') ] = match.group('v')
             data.update( kwargs )
@@ -129,7 +134,7 @@ def snzhist( collection, sim, argstr=None ):
 
         surveys = json.loads( readjson( collection, 'surveys' ) )
         if sim not in surveys.keys():
-            sys.stderr.write( f"error, could not find survey {sim} in collection {collection}\n" )
+            app.logger.error( f"error, could not find survey {sim} in collection {collection}\n" )
             return f'error, could not find survey {sim} in collection {collection}', 500
 
         survey = surveys[sim]
@@ -148,7 +153,7 @@ def snzhist( collection, sim, argstr=None ):
             # sys.stderr.write( f'gentypemap.keys() = '
             #                   f'{nl.join( [f"{i} (type {type(i)})" for i in gentypemap.keys() ] )}\n' )
             if gentype not in gentypemap.keys():
-                sys.stderr.write( f"Asked for unknown gentype {gentype}\n" )
+                app.logger.error( f"Asked for unknown gentype {gentype}\n" )
                 return f"Asked for unknown gentype {gentype}", 500
             gentypes = [ gentype ]
 
@@ -162,7 +167,7 @@ def snzhist( collection, sim, argstr=None ):
         elif data['whichhist'] == 'snrmax3zhist':
             histdata = survey['snrmax3zhist']
         else:
-            sys.stderr.write( f'Unknown snrmax {whichhist}, must be one of '
+            app.logger.error( f'Unknown snrmax {whichhist}, must be one of '
                               f'(zhist,snrmaxzhist,snrmax2zhist,snrmax3zhist)\n' )
             return f'Unknown snrmax {snrmax}', 500
 
@@ -228,8 +233,7 @@ def snzhist( collection, sim, argstr=None ):
 
         return response
     except Exception as e:
-        sys.stderr.write( f"Exception: {e}\n" )
-        sys.stderr.write( f"{traceback.format_exc()}\n" )
+        app.logger.exception( e )
         return flask.abort( 500 )
 
 # ======================================================================
@@ -262,7 +266,7 @@ def spechist( which, collection, sim, argstr=None ):
 
         if flask.request.is_json:
             data.update( flask.request.json() )
-        
+
         if which not in ['mag', 'snr', 'z']:
             return f'which must be one of mag, snr, or z'
 
@@ -270,12 +274,12 @@ def spechist( which, collection, sim, argstr=None ):
         if sim not in surveys.keys():
             sys.stderr.write( f"error, could not find survey {sim} in collection {collection}\n" )
             return f"error, could not find survey {sim} in collection {collection}", 500
-        
+
         survey = surveys[sim]
         if ( 'spechists' not in surveys[sim] ) or ( len(surveys[sim]['spechists']) == 0 ):
             return f"Survey doesn't have prism info."
         data['gentypemap'] = survey['gentypemap']
-        
+
         spechists = survey['spechists']
 
         if data['zbin'] is None:
@@ -295,7 +299,7 @@ def spechist( which, collection, sim, argstr=None ):
         data['mag'] = spechists['mmin'] + data['magbin'] * spechists['deltam']
         data['snrbin'] = int( data['snrbin'] )
         data['snr'] = spechists['snrmin'] + data['snrbin'] * spechists['deltasnr']
-            
+
         if data['tier'] == '__ALL__':
             data['tier'] = list( spechists['tiers'].keys() )
         else:
@@ -316,7 +320,7 @@ def spechist( which, collection, sim, argstr=None ):
             if str(gentype) not in data['gentypemap'].keys():
                 return f"Asked for unknown gentype {gentype}", 500
             gentypes = [ gentype ]
-            
+
         if which == 'mag':
             return spechist_mag( sim, survey, spechists, gentypes, data, argstr )
         elif which == "snr":
@@ -343,7 +347,7 @@ def spechist_z( sim, survey, spechists, gentypes, data, argstr ):
                      [ 'GENTYPE', 'zbin', 'snrbin', 'n' ] ]
         df = df.groupby( [ 'GENTYPE', 'zbin' ] ).sum()[ 'n' ].reset_index();
         dfs[tier] = df
-        
+
     nbars = len( data['tier'] ) * len( gentypes )
     dpi = 72
 
@@ -383,7 +387,7 @@ def spechist_z( sim, survey, spechists, gentypes, data, argstr ):
     return response
 
 
-    
+
 def spechist_mag( sim, survey, spechists, gentypes, data, argstr ):
     dpi = 72
     fig = pyplot.figure( figsize=(data['width']/dpi, data['height']/dpi), dpi=dpi, tight_layout=True )
@@ -503,3 +507,106 @@ def spechist_snr( sim, survey, spechists, gentypes, data, argstr ):
     response.headers['Content-Type'] = 'image/svg+xml'
 
     return response
+
+
+@app.route( "/randomltcv/<collection>/<sim>/<gentype>/<z>/<dz>", methods=['GET', 'POST'], strict_slashes=False )
+def randomltcv( collection, sim, gentype, z, dz ):
+    try:
+        gentype = int(gentype)
+        z = float(z)
+        dz = float(dz)
+
+        # TODO : update this to when there is more than one collection sim dir
+
+        # HACK ALERT : update this when collection names are more coherent
+
+        app.logger.debug( f"gentype={gentype}, z={z}, dz={dz}" )
+
+        simcomps = sim.strip().split()
+        app.logger.debug( f"collection={collection}, sim={sim}, simcomps[1]={simcomps[1]}" )
+        subdir = pathlib.Path( "/snana_sim" ) / f'ROMAN_{collection}_DATA-{simcomps[1]}'
+        g = [ i for i in subdir.glob( "*.README" ) ]
+        if len(g) == 0:
+            app.logger.error( f"Couldn't find a *.README file in {subdir}" )
+            raise RuntimeError( "Error parsing snana output data" )
+        if len(g) > 1:
+            app.logger.error( f"Found more than one *.README file in {subdir}" )
+            raise RuntimeError( "Error parsing snana output data" )
+
+        with open( g[0] ) as ifp:
+            blob = yaml.safe_load( ifp.read() )
+
+        model = None
+        for key in blob['DOCUMENTATION'].keys():
+            if key[0:11] == "INPUT_KEYS_":
+                if blob['DOCUMENTATION'][key]['GENTYPE'] == gentype:
+                    model = key[11:]
+                    app.logger.debug( f"Found gentype {gentype} as model {model}" )
+
+        if model is None:
+            app.logger.error( f"Couldn't find model for gentype {gentype}" )
+            raise RuntimeError( "Couldn't find snana files for type" )
+
+        # TODO : assuming gzipped, fix that
+        g = [ i for i in subdir.glob( f"ROMAN_{model}-*_HEAD.FITS.gz" ) ]
+        random.shuffle( g )
+        app.logger.info( f"Looking in files {g}" )
+
+        found = False
+        for headfile in g:
+            with fits.open(headfile) as f:
+                tab = f[1].data
+                app.logger.debug( f"Read {headfile.name}, got {len(tab)} rows" )
+                rightz = tab[ ( tab['SIM_REDSHIFT_CMB'] >= z - dz ) & ( tab['SIM_REDSHIFT_CMB'] <= z + dz ) ]
+                app.logger.debug( f"Found {len(rightz)} at z={z}±{dz}" )
+                if len(rightz) == 0:
+                    continue
+                dex = random.randint( 0, len(rightz)-1 )
+
+                if rightz[dex]['SIM_GENTYPE'] != gentype:
+                    app.logger.error( f"gentype mismatch error" )
+                    raise RuntimeError( "Gentype from HEAD file didn't match expected" )
+
+                snid = rightz[dex]['SNID']
+                ptrobs_min = rightz[dex]['PTROBS_MIN'] - 1
+                ptrobs_max = rightz[dex]['PTROBS_MAX']
+                snz = rightz[dex]['SIM_REDSHIFT_CMB']
+                mwebv = rightz[dex]['SIM_MWEBV']
+                av = rightz[dex]['SIM_AV']
+                rv = rightz[dex]['SIM_RV']
+                found = True
+
+                photfile = headfile.parent / headfile.name.replace( '_HEAD.FITS.gz', '_PHOT.FITS.gz' )
+                break
+
+        if not found:
+            app.logger.error( f"Failed to find an object of type {gentype} at z {z}±{dz}" )
+            raise RuntimeError( f"Failed to find an object of type {gentype} at z {z}±{dz}" )
+
+        retval = {
+            'status': 'ok',
+            'snid': int(snid),    # I hope python int can handle a 64-bit integer...
+            'zcmb': float(snz),
+            'mwebv': float(mwebv),
+            'av': float(av),
+            'rv': float(rv),
+            'zp': 27.5,      # Standard snana zeropoint
+            'ltcv': {}
+            }
+
+        app.logger.error( f"Opening photfile {photfile.name}" )
+        with fits.open( photfile ) as f:
+            photdata = f[1].data[ ptrobs_min : ptrobs_max ]
+
+        app.logger.error( f"photdata columns: {photdata.columns}" )
+
+        for band in numpy.unique( photdata['BAND'] ):
+            banddata = photdata[ photdata['BAND'] == band ]
+            retval['ltcv'][band] = { 'mjd': [ float(i) for i in banddata['MJD'] ],
+                                     'flux': [ float(i) for i in banddata['FLUXCAL'] ],
+                                     'dflux': [ float(i) for i in banddata['FLUXCALERR'] ] }
+
+        return retval
+    except Exception as ex:
+        app.logger.exception( ex )
+        return { 'status': 'error', 'error': str(ex) }

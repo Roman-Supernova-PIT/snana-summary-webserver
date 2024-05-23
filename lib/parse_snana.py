@@ -1,4 +1,6 @@
 import sys
+import os
+import io
 import pathlib
 import re
 import gzip
@@ -8,6 +10,7 @@ import subprocess
 import logging
 import pickle
 import argparse
+import traceback
 import numpy
 import pandas
 
@@ -32,21 +35,97 @@ class RomanSurveySummary:
     known_filters = ['R', 'Z', 'Y', 'J', 'H', 'F', 'K']
     surveynameparse = re.compile( '^(.*)\.SIMLIB(\.gz)?' )
 
-    def __init__( self, outdir, searchdir=None, snrmaxcut=5. ):
+    def __init__( self, outdir, searchdir=None, snana_simdir=None, snrmaxcut=5. ):
         self.outdir = pathlib.Path( outdir )
         self.collections = {}
         self.snana_scratchdir = {}
         self.snrmaxcut = snrmaxcut
-        if searchdir is not None:
-            self.read_all_outputs_in( searchdir )
+        self.snana_simdir = None if snana_simdir is None else pathlib.Path( snana_simdir )
+        self.searchdir = None if searchdir is None else pathlib.Path( searchdir )
 
-    def _read_inp_file( self, inputfile ):
+    def _read_inp_files( self, snana_outdir ):
+        """Internal : read a INP* and ANALYSIS_INSTRUCTIONS.README file for a single SNANA outdir.
+
+        One such directory might be:
+
+           /global/cfs/cdirs/m4385/survey_strategy_optimization/pipeline_output/2024-05-16_x536/output_1TIER_PRISM10
+
+        The directory is expected to have a single file named INP* as a yaml file.
+
+        Returns surveyinfo, instroinfo, analysisinfo, tiers, filemap
+
+        surveyinfo is a dict with the CONFIG_SURVEY dictionary from the INP* file
+           * FORCE_SNRMAX is converted from an array of strings (each
+             row has "SNR [λ0, λ1]") to an array of dictionaries
+             {'snr': <float>, 'lam0': <float>, 'lam1': <float> }
+
+           * MJD_SEASONS is converted from an array of strings to an array of dicts
+               { 'season_mjd0': <float>, 'season_mjd1': <float> }
+
+        instrinfo is a dict with the yaml read from the file whose path
+           is given by the CONFIG_INSTRUMENT_FILE field of the INP* file
+
+        analysisinfo is a dict with the CONFIG_ANALYSIS_PREP dictionary from the INP* file
+           * field 'muopt' is a list dicts containing mu options; it always starts with
+                  { 'name': 'standard', 'idsurvey_select': -99 }
+                  (This is not explicitly in the INP file, but is implied.)
+             additional lines are parsed from the analysisinfo['BBC']['MUOPT'], if that key exists
+
+           * prescales is a dictionary of { type:str : prescale:float }
+             - It is parsed from analysisinfo['SIM']['PRESCALE_TRANSIENT_LSIT']
+             - HACK ALERT : analysinsof['prescales']'IIP+IIL' is added to have the same value as ...['IIL']
+
+        tiers is a list of dicts, parsed out of surveyinfo['TIERS']; each element of the list has:
+              { 'name': <str>, 'ra': <float>, 'dec': <float>, 'bands': <list of str>,
+                'relarea': <list of int>, 'dt_visit': <list of float>, 'z_snrmatch': <list of float> }
+          the length of the lists can be different; the three lists define a 3d matrix of sims to run.
+
+        filemap is a pandas dataframe parsed from the csv file
+           ANALSYS_INSTRUCTIONS.README in the same directory.  Each row
+           in that file has the version name, the simlib file, and the
+           three indices into area, t_exp, and z_snrmax.  filemap is a
+           pandas dataframe with keys i_AREA, i_TEXPOSE, and i_zSNRMAX.
+
+        """
+
+        files = [ f for f in snana_outdir.glob( "INP*" ) ]
+        if len(files) != 1:
+            raise RuntimeError( f"There are {len(files)} INP* files in {snana_outdir.name}, expected 1" )
+        inputfile = files[0]
+
+        analysis_instr = snana_outdir / "ANALYSIS_INSTRUCTIONS.README"
+        if not analysis_instr.is_file():
+            raise FileNotFoundError( f"Could not find ANALYSIS_INSTRUCTIONS.README in {snana_outdir.name}" )
+
+        # files = [ f for f in snana_outdir.glob( "OUTPUT1*" ) ]
+        # if len(files) != 1:
+        #     raise RuntimeError( f"There are {len(files)} OUTPUT1* files in {snana_outdir.name}, expected 1" )
+        # snana_output1 = files[0]
+        # if not snana_output1.is_dir():
+        #     raise FileNotFoundError( f"{snana_output1} is not a directory" )
+
+        # mergelog = snana_output1 / 'MERGE.LOG'
+        # if not mergelog.is_file():
+        #     raise FileNotFoundError( f"Failed to find {snana_outputdir.name}/{snana_output1.name}/MERGE.LOG" )
+
+        # Read the ANALYSIS_INSTRUCTIONS.README file to get a list of
+        #  simlibs files and version names as a function of indexes into area, texpose, snrmatch
+
+        # filemap = pandas.read_csv( analysis_instr, delim_whitespace=True, comment='#', skip_blank_lines=True )
+        filemap = pandas.read_csv( analysis_instr, sep='\s+', comment='#', skip_blank_lines=True )
+        filemap.set_index( [ 'i_AREA', 'i_TEXPOSE', 'i_zSNRMAX' ], inplace=True )
+
+        # Read the INP file
+
         with open( inputfile ) as ifp:
             blob = yaml.safe_load( ifp.read() )
 
         surveyinfo = blob['CONFIG_SURVEY']
-        instrinfo = blob['CONFIG_INSTRUMENT']
         analysisinfo = blob['CONFIG_ANALYSIS_PREP']
+
+        instrinfofile = blob['CONFIG_INSTRUMENT_FILE'].replace( '$SNANA_ROMAN_ROOT', os.getenv('SNANA_ROMAN_ROOT') )
+        with open( instrinfofile ) as ifp:
+            instrinfo = yaml.safe_load( ifp.read() )
 
         # Turn some of the arrays into subdicts
         parse_snrmax = re.compile( r'^\s*(?P<snr>\d*\.?\d+)\s+\[(?P<lam0>\d*\.?\d+),'
@@ -109,36 +188,50 @@ class RomanSurveySummary:
         analysisinfo[ 'muopt' ] = [  { 'name': 'standard', 'idsurvey_select': -99 } ]
         muparse = re.compile( r'^\s*(?P<muname>.*)\s+idsurvey_select=(?P<surveyid>\d+)' )
         hackremovethismuparse = re.compile( '^\s*idsurvey_select=(?P<surveyid>\d+)' )
-        for i, line in enumerate( analysisinfo['BBC']['MUOPT'] ):
-            match = muparse.search( line )
-            if match is None:
-                match = hackremovethismuparse.search( line )
-                muname = '(unnamed)'
+        if 'MUOPT' in analysisinfo['BBC'].keys():
+            for i, line in enumerate( analysisinfo['BBC']['MUOPT'] ):
+                match = muparse.search( line )
                 if match is None:
-                    raise ValueError( f"Failed to parse BBC.MUOPT line {line}" )
-            else:
-                muname = match.group('muname')
-            analysisinfo['muopt'].append( { 'name': muname,
-                                            'idsurvey_select': int( match.group('surveyid') ) } )
+                    match = hackremovethismuparse.search( line )
+                    muname = '(unnamed)'
+                    if match is None:
+                        raise ValueError( f"Failed to parse BBC.MUOPT line {line}" )
+                else:
+                    muname = match.group('muname')
+                analysisinfo['muopt'].append( { 'name': muname,
+                                                'idsurvey_select': int( match.group('surveyid') ) } )
 
-        return surveyinfo, instrinfo, analysisinfo, tiers
+
+        # Parse the prescale transient list
+
+        analysisinfo[ 'prescales' ] = {}
+        for scaleinfo in analysisinfo['SIM']['PRESCALE_TRANSIENT_LIST']:
+            match = re.search('^ *([^/]+)/(.*)$', scaleinfo )
+            if match is None:
+                raise ValueError( f"Failed to parse prescale string {scaleinfo}" )
+            analysisinfo[ 'prescales' ][ match.group(1) ] = float( match.group(2) )
+
+        # WARNING HACK ALERT to deal with an inconsistency in snana output
+        analysisinfo[ 'prescales' ][ 'IIP+IIL' ] = analysisinfo[ 'prescales' ][ 'IIL' ]
+
+        return surveyinfo, instrinfo, analysisinfo, tiers, filemap
 
 
-    def _read_simlib_doc( self, snana_outdir, simlibbasename, tiers ):
+    def _read_simlib_doc( self, simlib_file, tiers ):
         surveyinfo = { 'tiers': {} }
 
-        simlib = snana_outdir / f'{simlibbasename}.SIMLIB'
-        if not simlib.is_file():
-            simlibgz = simlib.parent / f'{simlib.name}.gz'
+        simlib_file = pathlib.Path( simlib_file )
+        if not simlib_file.is_file():
+            simlibgz = simlib_file.parent / f'{simlib_file.name}.gz'
             if not simlibgz.is_file():
-                raise FileNotFoundError( f"Couldn't find {simlib}" )
-            simlib = simlibgz
+                raise FileNotFoundError( f"Couldn't find {simlib_file}" )
+            simlib_file = simlibgz
 
         lines = []
-        if ( simlib.name[:-3] == '.gz' ):
-            ifp = gzip.open( simlib, 'rt' )
+        if ( simlib_file.name[:-3] == '.gz' ):
+            ifp = gzip.open( simlib_file, 'rt' )
         else:
-            ifp = open( simlib, 'rt' )
+            ifp = open( simlib_file, 'rt' )
         for line in ifp:
             if line[0:18] == "DOCUMENTATION_END:": break
             lines.append( line )
@@ -182,11 +275,24 @@ class RomanSurveySummary:
 
         return surveyinfo
 
-    def _gen_zhists( self, dumpfilepath, gentypes ):
+    def _gen_zhists( self, dumpfilepath, gentypemap, prescales ):
 
         # TODO : scaling CC by 10 (or whatever)
 
-        dumpdf = pandas.read_csv( dumpfilepath, delim_whitespace=True, comment='#', skip_blank_lines=True )
+        dumpfilepath = pathlib.Path( dumpfilepath )
+        if dumpfilepath.is_file():
+            # dumpdf = pandas.read_csv( dumpfilepath, delim_whitespace=True, comment='#', skip_blank_lines=True )
+            dumpdf = pandas.read_csv( dumpfilepath, sep='\s+', comment='#', skip_blank_lines=True )
+        else:
+            dumpgzfilepath = dumpfilepath.parent / f"{dumpfilepath.name}.gz"
+            if dumpgzfilepath.is_file():
+                # dumpdf = pandas.read_csv( dumpgzfilepath, delim_whitespace=True, compression='gzip',
+                #                           comment='#', skip_blank_lines=True )
+                dumpdf = pandas.read_csv( dumpgzfilepath, sep='\s+', compression='gzip',
+                                          comment='#', skip_blank_lines=True )
+            else:
+                raise FileNotFoundError( f"Can't find {dumpfilepath} or {dumpgzfilepath}" )
+
 
         fields = dumpdf['FIELD'].unique()
         types = dumpdf['GENTYPE'].unique()
@@ -199,7 +305,10 @@ class RomanSurveySummary:
             fielddf = dumpdf[ dumpdf['FIELD'] == field ]
             for zlow in numpy.arange( 0., 3.1, 0.1 ):
                 sne_at_z = fielddf[ ( fielddf['ZCMB'] >= zlow ) & ( fielddf['ZCMB'] < zlow + 0.1 ) ]
-                for gentype in gentypes:
+                for gentype, gentypestr in gentypemap.items():
+                    prescale = 1.
+                    if gentypestr in prescales.keys():
+                        prescale = float( prescales[gentypestr] )
                     gentypesne = sne_at_z[ sne_at_z['GENTYPE'] == gentype ]
                     hist['tier'].append( field )
                     snrmaxhist['tier'].append( field )
@@ -213,55 +322,54 @@ class RomanSurveySummary:
                     snrmaxhist['zCMB'].append( zlow )
                     snrmax2hist['zCMB'].append( zlow )
                     snrmax3hist['zCMB'].append( zlow )
-                    hist['n'].append( len(gentypesne) )
-                    snrmaxhist['n'].append( len( gentypesne[ gentypesne['SNRMAX'] > self.snrmaxcut ] ) )
-                    snrmax2hist['n'].append( len( gentypesne[ gentypesne['SNRMAX2'] > self.snrmaxcut ] ) )
-                    snrmax3hist['n'].append( len( gentypesne[ gentypesne['SNRMAX3'] > self.snrmaxcut ] ) )
+                    hist['n'].append( prescale * len(gentypesne) )
+                    snrmaxhist['n'].append( prescale * len( gentypesne[ gentypesne['SNRMAX'] > self.snrmaxcut ] ) )
+                    snrmax2hist['n'].append( prescale * len( gentypesne[ gentypesne['SNRMAX2'] > self.snrmaxcut ] ) )
+                    snrmax3hist['n'].append( prescale * len( gentypesne[ gentypesne['SNRMAX3'] > self.snrmaxcut ] ) )
 
         return hist, snrmaxhist, snrmax2hist, snrmax3hist
 
-    def _get_snana_sndata_dir( self, collection, sndatabasename, simlibbasename ):
+    def _read_dump( self, collection, survey_version, prescales ):
+
         # Find the SNANA output scratch directory
         #  (We know the parent will be the same for all sims in a collection)
 
         if collection not in self.snana_scratchdir.keys():
-            _logger.debug( f"Running sana.exe GETINFO {sndatabasename}_{simlibbasename} to find "
-                           f"SNANA data dir" )
-            retries = 5
-            while retries > 0:
-                try:
-                    res = subprocess.run( [ 'snana.exe', 'GETINFO', f'{sndatabasename}_{simlibbasename}' ],
-                                          capture_output=True, timeout=30 )
-                    if len( res.stderr ) > 0:
-                        raise RuntimeError( f"Failed to run snana.exe: {res.stderr}" )
-                    retries = 0
-                except subprocess.TimeoutExpired as ex:
-                    if retries > 0:
-                        _logger.warning( f"snana.exe run timed out, trying again" )
-                    else:
-                        _logger.error( f"snana.exe run timed out repeatedly, dying" )
-                        raise RuntimeError( f"snana.exe run timed out repeatedly, dying" )
-                    retries -= 1
-            for line in res.stdout.decode( "utf-8" ).split("\n"):
-                if line[0:12] == 'SNDATA_PATH:':
-                    self.snana_scratchdir[collection] = pathlib.Path( line.split()[1] ).parent
-                    break
-            _logger.debug( f"...done running snana.exe" )
+            if self.snana_simdir is not None:
+                self.snana_scratchdir[ collection ] = self.snana_simdir
+            else:
+                _logger.debug( f"Running snana.exe GETINFO {survey_version} to find "
+                               f"SNANA data dir" )
+                retries = 5
+                while retries > 0:
+                    try:
+                        res = subprocess.run( [ 'snana.exe', 'GETINFO', survey_version ],
+                                              capture_output=True, timeout=30 )
+                        if len( res.stderr ) > 0:
+                            raise RuntimeError( f"Failed to run snana.exe: {res.stderr}" )
+                        retries = 0
+                    except subprocess.TimeoutExpired as ex:
+                        if retries > 0:
+                            _logger.warning( f"snana.exe run timed out, trying again" )
+                        else:
+                            _logger.error( f"snana.exe run timed out repeatedly, dying" )
+                            raise RuntimeError( f"snana.exe run timed out repeatedly, dying" )
+                        retries -= 1
+                for line in res.stdout.decode( "utf-8" ).split("\n"):
+                    if line[0:12] == 'SNDATA_PATH:':
+                        self.snana_scratchdir[collection] = pathlib.Path( line.split()[1] ).parent
+                        break
+                _logger.debug( f"...done running snana.exe" )
 
         if collection not in self.snana_scratchdir.keys():
             raise RuntimeError( f"Failed to find snana_scratchdir for {collection}" )
-        sndatadir = self.snana_scratchdir[collection] / f'{sndatabasename}_{simlibbasename}'
 
-        return sndatadir
-
-
-    def _read_dump( self, collection, sndatabasename, simlibbasename ):
-        sndatadir = self._get_snana_sndata_dir( collection, sndatabasename, simlibbasename )
+        sndatadir = self.snana_scratchdir[collection] / survey_version
 
         # Read the .README file to get the gentype to string type match
 
         lines = []
-        with open( sndatadir / f'{sndatabasename}_{simlibbasename}.README' ) as ifp:
+        with open( sndatadir / f'{survey_version}.README' ) as ifp:
             for line in ifp:
                 if line[0:18] == 'DOCUMENTATION_END:' : break
                 lines.append( line )
@@ -277,16 +385,12 @@ class RomanSurveySummary:
 
         # Build the histograms
 
-        dumpfilepath = sndatadir / f'{sndatabasename}_{simlibbasename}.DUMP'
+        dumpfilepath = sndatadir / f'{survey_version}.DUMP'
         ( zhist, snrmaxzhist,
-          snrmax2zhist, snrmax3zhist ) = self._gen_zhists( dumpfilepath, gentypemap.keys() )
+          snrmax2zhist, snrmax3zhist ) = self._gen_zhists( dumpfilepath, gentypemap, prescales )
 
         return gentypemap, zhist, snrmaxzhist, snrmax2zhist, snrmax3zhist
 
-        surveys[simlibbasename]['zhist'] = zhist
-        surveys[simlibbasename]['snrmaxdzhist'] = snrmaxzhist
-        surveys[simlibbasename]['snrmax2dzhist'] = snrmax2zhist
-        surveys[simlibbasename]['snrmax3dzhist'] = snrmax3zhist
 
     def _read_spec( self, collection, sndatabasename, simlibbasename, tiers ):
         # This one tries to make later summing of histogram seasier.
@@ -382,7 +486,7 @@ class RomanSurveySummary:
 
         return hist
 
-    def read_files( self, collection, inputfile, regen=False, savecache=True, clobber=False ):
+    def read_files( self, collection, snana_outdir, regen=False, savecache=True, clobber=False ):
         """Load information from a single survey collection.
 
         Parameters
@@ -391,10 +495,13 @@ class RomanSurveySummary:
             The name that will identify this collection in the objects
             collections dict.
 
-        inputfile : str or Path
-            The INP_makeSimlib_*.config file; it must be in the SNANA
-            output directory, as its parent will be used to find the
-            various SIMLIB files.
+        snana_outdir : str or Path
+            The output directory for SNANA.  The following files must exist here:
+              * a single INP_ file
+              * a single OUTPUT1* directory
+              * MERGE.LOG in the OUTPUT1* directory
+              * ANALYSIS_INSTRUCTIONS.README
+              * A *.SIMLIB file for each row in the ANALYSIS_INSTRUCTIONS.README
 
         regen : bool, default False
             If False, will try to read the necessary JSON files from the
@@ -444,9 +551,9 @@ class RomanSurveySummary:
                                    'zhist': { 'tier': [...], 'gentype': [...], 'zCMB': [...], 'n': [...] },
                                    'snrmaxzhist': <same structure>
                                    'snrmaxz2hist': <same structure>
-                                   'snrmaxz3hist': <same structure>,
-                                   'spechists': { <see _read_spec> },
-                                   'gentypemap' : { gentype: name, ... }
+                                   'snrmaxz3hist': <same structure> } },
+                                   'gentypemap' : { gentype: name, ... },
+                                   'long_survey_version' : <str>,
                                    'muopt': [ { 'name': str,
                                                 'idsurvey_select': int,
                                                  (bunch of cosmology keys, including 'FoM_stat') }
@@ -462,14 +569,11 @@ class RomanSurveySummary:
 
         # TODO read cache
 
-        inputfile = pathlib.Path( inputfile ).resolve()
-        snana_outdir = inputfile.parent
+        snana_outdir = pathlib.Path( snana_outdir ).resolve()
 
-        # Read the INP file
+        # Read the INP, ANALYSIS_INSTRUCTIONS.README, and OUTPUT1 files
 
-        surveyinfo, instrinfo, analysisinfo, tiers = self._read_inp_file( inputfile )
-
-        sndatabasename = f"{analysisinfo['SIM']['PREFIX']}_DATA"
+        surveyinfo, instrinfo, analysisinfo, tiers, filemap = self._read_inp_files( snana_outdir )
 
         # Make sure an assumption I'm going to make is true, that the
         # number of areas, dt_visits, and zSNRMATCHes are the same for all tiers.
@@ -491,28 +595,50 @@ class RomanSurveySummary:
         for ai, relarea in enumerate( tiers[0]['relarea'] ):
             for ti, dt_visit in enumerate( tiers[0]['dt_visit'] ):
                 for zi, z_snrmatch in enumerate( tiers[0]['z_snrmatch'] ):
-                    simlibbasename = f'ROMAN-a{ai:02d}-t{ti:02d}-z{zi:02d}'
-                    _logger.debug( f"Processing {simlibbasename}" )
+                    subdf = filemap.xs( ( ai, ti, zi ), level=( 'i_AREA', 'i_TEXPOSE', 'i_zSNRMAX' ) )
+                    if len(subdf) != 1:
+                        _logger.error( "Bad things have happened." )
+                        import pdb; pdb.set_trace()
+                        pass
+                    survey_version = subdf.iloc[0].VERSION
 
-                    surveys[simlibbasename] = self._read_simlib_doc( snana_outdir, simlibbasename, tiers )
-                    ( gentypemap, zhist, snrmaxzhist,
-                      snrmax2zhist, snrmax3zhist ) = self._read_dump( collection, sndatabasename, simlibbasename )
-                    spechists = self._read_spec( collection, sndatabasename, simlibbasename, tiers )
-                    surveys[simlibbasename]['gentypemap'] = gentypemap
-                    surveys[simlibbasename]['zhist'] = zhist
-                    surveys[simlibbasename]['snrmaxzhist'] = snrmaxzhist
-                    surveys[simlibbasename]['snrmax2zhist'] = snrmax2zhist
-                    surveys[simlibbasename]['snrmax3zhist'] = snrmax3zhist
-                    surveys[simlibbasename]['spechists'] = spechists
+                    # WARNING filename assumptions
+                    if survey_version[0:len(collection)+12] == f'ROMAN_{collection}_DATA-':
+                        short_survey_version = f'{collection} {survey_version[len(collection)+12:]}'
+                    else:
+                        short_survey_version = survey_version
+                    simlib_file = snana_outdir / subdf.iloc[0].SIMLIB_FILE
 
-        # TODO : verify that the texpose in spechists match what is in surveyinfo
+                    _logger.debug( f"Processing {survey_version} ({simlib_file})" )
+
+                    try:
+                        surveys[short_survey_version] = self._read_simlib_doc( simlib_file, tiers )
+                        ( gentypemap, zhist, snrmaxzhist,
+                          snrmax2zhist, snrmax3zhist ) = self._read_dump( collection, survey_version,
+                                                                          analysisinfo['prescales'] )
+                        surveys[short_survey_version]['gentypemap'] = gentypemap
+                        surveys[short_survey_version]['zhist'] = zhist
+                        surveys[short_survey_version]['snrmaxzhist'] = snrmaxzhist
+                        surveys[short_survey_version]['snrmax2zhist'] = snrmax2zhist
+                        surveys[short_survey_version]['snrmax3zhist'] = snrmax3zhist
+                        surveys[short_survey_version]['long_survey_version'] = survey_version
+                    except Exception as ex:
+                        strio = io.StringIO()
+                        strio.write( f"Failed to get survey info for {short_survey_version}; Exception: " )
+                        traceback.print_exc( file=strio )
+                        _logger.error( strio.getvalue() )
+                        if short_survey_version in surveys.keys():
+                            del surveys[ short_survey_version ]
 
         # Get the cosmology and figure of merit from the BBC files
 
-        _logger.debug( "Reading BBC_SUMMARY_wfit.FITRES" )
-        bbcsummary = pandas.read_csv( ( snana_outdir / f'OUTPUT3_BBC_{sndatabasename}_ROMAN'
-                                        / 'BBC_SUMMARY_wfit.FITRES'),
-                                      delim_whitespace=True, comment='#' )
+        _logger.debug( "Reading BBC_SUMMARY_wfit0.FITRES" )
+        files = [ f for f in snana_outdir.glob( "OUTPUT3*" ) ]
+        if len(files) != 1:
+            raise RuntimeError( f"There are {len(files)} OUTPUT3* files in {snana_outdir.name}, expected 1" )
+        output3file = files[0] / 'BBC_SUMMARY_wfit0.FITRES'
+        # bbcsummary = pandas.read_csv( output3file, delim_whitespace=True, comment='#' )
+        bbcsummary = pandas.read_csv( output3file, sep='\s+', comment='#' )
         if len( bbcsummary['FITOPT'].unique() ) > 1:
             raise ValueError( f"Assumption failure: there is more than one FITOPT!" )
         if bbcsummary['FITOPT'].unique()[0] != 0:
@@ -523,17 +649,17 @@ class RomanSurveySummary:
         if ( muopts != [ i for i in range(len(analysisinfo['muopt'])) ] ):
             raise ValueError( f"muopts in bbcsummary for {sndatabasename} not what was expected!" )
 
-        for survey in surveys.keys():
-            surveys[survey]['muopt'] = []
+        for skey, sval in surveys.items():
+            survey = sval['long_survey_version']
+            sval['muopt'] = []
             for muopt in muopts:
-                thisbbc = bbcsummary[ ( bbcsummary['MUOPT'] == muopt ) &
-                                      ( bbcsummary['VERSION'] == f'{sndatabasename}_{survey}' ) ]
+                thisbbc = bbcsummary[ ( bbcsummary['MUOPT'] == muopt ) & ( bbcsummary['VERSION'] == survey ) ]
                 if len( thisbbc ) != 1:
                     raise ValueError( f"Found {len(thisbbc)} lines in BBC file for {survey}, muopt={muopt}" )
                 bbcdict = thisbbc.iloc[0].to_dict()
                 bbcdict['FoM_stat'] = bbcdict['FoM']
                 del bbcdict['FoM']
-                surveys[survey]['muopt'].append( bbcdict )
+                sval['muopt'].append( bbcdict )
 
         # Done
 
@@ -548,12 +674,27 @@ class RomanSurveySummary:
 
         if savecache:
             for attr in ( 'surveyinfo', 'tiers', 'instrinfo', 'analysisinfo', 'surveys' ):
-                with open( self.outdir / f'{snana_outdir.name}_{attr}.json', 'w' ) as ofp:
-                    # pickle.dump( self.collections[collection][attr], ofp )
+                with open( self.outdir / f'{collection}_{attr}.json', 'w' ) as ofp:
                     json.dump( self.collections[collection][attr], ofp, cls=NumpyEncoder )
 
-    def read_all_outputs_in( self, searchdir ):
-        raise NotImplementedError( "read_all_outputs_in() not implemented" )
+    def process_searchdir( self ):
+        if self.searchdir is None:
+            raise ValueError( "Can't process_searchdir : no searchdir was given to RomanSurveySummary constructor." )
+
+        outputparse = re.compile( "^output_?(.*)$" )
+
+        _logger.info( f"Looking for collections in {self.searchdir}" )
+        for direc in self.searchdir.glob( "output*" ):
+            match = outputparse.search( direc.name )
+            if match is None:
+                raise RuntimeError( f"Failed to parse {direc.name} for output_?(.*)" )
+            surveyname = match.group(1)
+
+            _logger.info( f"Working on collection {surveyname}" )
+            self.read_files( surveyname, direc )
+
+        _logger.info( f"All done with collecitons in {self.searchdir}" )
+
 
 # ======================================================================
 
@@ -563,20 +704,33 @@ def main():
                                       formatter_class=argparse.ArgumentDefaultsHelpFormatter )
     parser.add_argument( "-v", "--verbose", action='store_true', default=False, help="Show debug info" )
     parser.add_argument( "-o", "--outdir", default=".", help="Output directory for pkl files" )
-    parser.add_argument( "-i", "--inps", nargs='+', help="INP files to read" )
+    parser.add_argument( "-p", "--campaign-pipeline-dir",
+                         help=( "The SNANA campaign directory; under this directory, each subdirectory "
+                                "named output_* is a single collection within the campaign, has an "
+                                "ANALYSIS_INSTRUCTIONS.README file, and OUTPUT[123]* files" ) )
+    parser.add_argument( "-s", "--snana-simdir",
+                         help=( "The SNANA sim directory; this holds all of the SNANA SIMS for the "
+                                "campaign in --campaign-pipeline-dir.  In this directory are "
+                                "subdirectories corresponding to all of the versions found in all of the"
+                                ".../OUTPUT2*/MERGE.LOG files under campaign-pipeline-dir." ) )
     args = parser.parse_args()
 
     if args.verbose:
         _logger.setLevel( logging.DEBUG )
 
-    ss = RomanSurveySummary( args.outdir )
-    for inpfile in args.inps:
-        inpfile = pathlib.Path( inpfile )
-        _logger.info( f"Reading {inpfile}..." )
-        p = pathlib.Path( inpfile )
-        ss.read_files( inpfile.name, inpfile )
+    ss = RomanSurveySummary( args.outdir, searchdir=args.campaign_pipeline_dir, snana_simdir=args.snana_simdir )
+    ss.process_searchdir()
 
-    _logger.info( f"Done." )
+    # for snanadir in args.snana_outdirs:
+    #     inpfile = pathlib.Path( snanadir )
+    #     if inpfile.name[0:7] == 'output_':
+    #         survey_name = inpfile.name[7:]
+    #     else:
+    #         survey_name = inpfile
+    #     _logger.info( f"Reading survey {survey_name} from {inpfile}..." )
+    #     ss.read_files( survey_name, inpfile  )
+
+    # _logger.info( f"Done." )
 
 
 if __name__ == "__main__":
