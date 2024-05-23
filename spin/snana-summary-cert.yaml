@@ -5,5 +5,5 @@ data:
 kind: Secret
 metadata:
   name: snana-strategy-cert
-e  namespace: roman-obsplan-snana-summ
+  namespace: roman-obsplan-snana-summ
 type: kubernetes.io/tls
