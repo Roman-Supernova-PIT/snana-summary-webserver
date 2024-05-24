@@ -564,7 +564,10 @@ snanasum.PhotSummary = class extends snanasum.InfoWindow
     show_sim( sim )
     {
         let self = this;
-        if ( sim == this.shown_sim ) return;
+        // Remove this next if statement; show_sim is
+        //   called when plot parmeters are changed, not just when
+        //   the sim is changed.
+        // if ( sim == this.shown_sim ) return;
 
         let p, div, hbox, table, tr, th, td;
 
