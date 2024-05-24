@@ -413,14 +413,23 @@ class RomanSurveySummary:
             'nspecstrategies': int,    # number of different spectrum strategies
             'spectrumhists':
                 [ { tier: { 'texpose':   exposure time for this tier
-                            band_1: { 'GENTYPE': int,
+                            <band_1>: { 'GENTYPE': int,
                                       'zbin': int,
                                       'tbin': int,
                                       'magbin': int,
                                       'snrbin': int,
                                       'n': int,         # of SNe in the relevant bins
                                     },
-                            band_2: { ... } } } ]
+                            <band_1>_restframe { 'GENTYPE': int,
+                                               'zbin': int,
+                                               'tbin': int,
+                                               'magbin': int,
+                                               'snrbin': int,
+                                               'n': int },
+                            <band_2>: { ... },
+                            <band_2>_restframe: { ... },
+                            ... }
+                   } ]
         }
 
 
@@ -512,25 +521,32 @@ class RomanSurveySummary:
 
                 tierdf['zbin'] = ( ( tierdf['zHEL'] - zmin ) / deltaz ).apply( int )
                 tierdf['tbin'] = ( ( tierdf['TOBS'] - tobsmin ) / deltat ).apply( int )
+                tierdf['trestbin'] = ( ( tierdf['TOBS'] / ( 1 + tierdf['zHEL'] ) - tobsmin ) / deltat ).apply( int )
 
                 for band in [ 'Z', 'Y', 'J', 'H' ]:
                     magstr = f'{band}_mag_syn'
                     errstr = f'{band}_magerr_syn'
 
-                    banddf = tierdf[ [ 'GENTYPE', 'zbin', 'tbin', magstr, errstr ] ].copy()
+                    banddf = tierdf[ [ 'GENTYPE', 'zbin', 'tbin', 'trestbin', magstr, errstr ] ].copy()
                     banddf['magbin'] = ( ( banddf[magstr] - mmin ) / deltam ).apply(int)
                     banddf['snr'] = 2.5 / ( banddf[errstr] * 2.30258509299405 )
                     banddf.loc[ banddf[errstr] <= 0., 'snr' ] = 0.
                     banddf.loc[ banddf['snr'] > 20., 'snr' ] = 20.
                     banddf['snrbin'] = ( ( banddf['snr'] - snrmin ) / deltasnr ).apply(int)
 
-                    banddf.sort_values( [ 'GENTYPE', 'zbin', 'tbin', 'magbin', 'snrbin' ], inplace=True )
-                    banddf = banddf.groupby( [ 'GENTYPE', 'zbin', 'tbin', 'magbin', 'snrbin' ] ).count()['snr']
+                    obsdf = banddf.sort_values( [ 'GENTYPE', 'zbin', 'tbin', 'magbin', 'snrbin' ] )
+                    obsdf = obsdf.groupby( [ 'GENTYPE', 'zbin', 'tbin', 'magbin', 'snrbin' ] ).count()['snr']
+                    obsdf = obsdf.to_frame().reset_index()
+                    obsdf.rename( { 'snr': 'n' }, axis='columns', inplace=True )
 
-                    banddf = banddf.to_frame().reset_index()
-                    banddf.rename( { 'snr': 'n' }, axis='columns', inplace=True )
+                    restdf = banddf.sort_values( [ 'GENTYPE', 'zbin', 'trestbin', 'magbin', 'snrbin' ] )
+                    restdf = restdf.groupby( [ 'GENTYPE', 'zbin', 'trestbin', 'magbin', 'snrbin' ] ).count()['snr']
+                    restdf = restdf.to_frame().reset_index()
+                    restdf.rename( { 'snr': 'n' }, axis='columns', inplace=True )
 
-                    stratdict[tier][band] = banddf.to_dict( 'list' )
+                    stratdict[tier][band] = obsdf.to_dict( 'list' )
+                    stratdict[tier][f'{band}_restframe'] = restdf.to_dict( 'list' )
+
             specstrat.append( stratdict )
 
         hist[ 'spectrumhists' ] = specstrat

@@ -132,6 +132,10 @@ snanasum.Collection = class {
     renderpage()
     {
         var self = this;
+        rkWebUtil.wipeDiv( this.maindiv );
+        rkWebUtil.elemaker( "h3", this.maindiv,
+                            { "text": "Loading...",
+                              "classes": [ "italic", "bold", "warning" ] } );
         if ( this.surveylist == null ) {
             let connector = new rkWebUtil.Connector( "/summarydata" );
             connector.sendHttpRequest( "/"+this.collection, {},
@@ -926,7 +930,7 @@ snanasum.SpecSummary = class extends snanasum.InfoWindow
         let self = this;
         this.shown_sim = null;
 
-        let p;
+        let p, span;
 
         p = rkWebUtil.elemaker( "p", this.topdiv, { "text": "Warning: non-Ia numbers aren't scaled right",
                                                     "classes": [ "bold", "italic" ] } );
@@ -937,14 +941,16 @@ snanasum.SpecSummary = class extends snanasum.InfoWindow
         p = rkWebUtil.elemaker( "p", this.topdiv );
         rkWebUtil.button( p, "Show", () => { self.update_hist(); } );
         this.which_hist_wid = rkWebUtil.elemaker( "select", p,
-                                                  { "change": () => { self.update_hist() } } );
+                                                  { "change": () => { self.update_which_hist_wid() } } );
         rkWebUtil.elemaker( "option", this.which_hist_wid, { "text": "Redshift",
-                                                             "attributes": { "value": "z",
-                                                                             "selected": "selected" } } );
+                                                             "attributes": { "value": "z" } } );
         rkWebUtil.elemaker( "option", this.which_hist_wid, { "text": "Magnitude",
                                                              "attributes": { "value": "mag" } } );
         rkWebUtil.elemaker( "option", this.which_hist_wid, { "text": "S/N",
                                                              "attributes": { "value": "snr" } } );
+        rkWebUtil.elemaker( "option", this.which_hist_wid, { "text": "Rest Phase vs. Redshift",
+                                                             "attributes": { "value": "rest_phase_z",
+                                                                             "selected": "selected" } } );
 
         p.appendChild( document.createTextNode( " histogram of " ) );
         this.gentype_dropdown = rkWebUtil.elemaker( "select", p,
@@ -955,42 +961,64 @@ snanasum.SpecSummary = class extends snanasum.InfoWindow
         this.band_dropdown = rkWebUtil.elemaker( "select", p,
                                                  { "change": () => { self.update_hist(); } } );
 
-        p.appendChild( document.createTextNode( " for z=" ) );
-        this.z_dropdown = rkWebUtil.elemaker( "select", p,
+        this.z_span = rkWebUtil.elemaker( "span", p, { "classes": [ "displayinline" ] } )
+        this.z_span.appendChild( document.createTextNode( " for z=" ) );
+        this.z_dropdown = rkWebUtil.elemaker( "select", this.z_span,
                                               { "change": () => { self.update_hist() } } );
 
-        p.appendChild( document.createTextNode( " t=" ) );
-        this.t_dropdown = rkWebUtil.elemaker( "select", p,
+        this.t_span = rkWebUtil.elemaker( "span", p, { "classes": [ "displayinline" ] } );
+        this.t_span.appendChild( document.createTextNode( " t_" ) );
+        this.t_restorobs_dropdown = rkWebUtil.elemaker( "select", this.t_span,
+                                                        { "change": () => { self.update_hist() } } );
+        rkWebUtil.elemaker( "option", this.t_restorobs_dropdown, { "text": "rest",
+                                                                   "attributes": { "value": "rest" } } );
+        rkWebUtil.elemaker( "option", this.t_restorobs_dropdown, { "text": "obs",
+                                                                   "attributes": { "value": "obs",
+                                                                                   "selected": "selected" } } );
+        this.t_span.appendChild( document.createTextNode( "=" ) );
+        this.t_dropdown = rkWebUtil.elemaker( "select", this.t_span,
                                               { "change": () => { self.update_hist() } } );
 
 
-        p.appendChild( document.createTextNode( " m=" ) );
-        this.m_dropdown = rkWebUtil.elemaker( "select", p,
+        this.m_span = rkWebUtil.elemaker( "span", p, { "classes": [ "displayinline" ] } );
+        this.m_span.appendChild( document.createTextNode( " m=" ) );
+        this.m_dropdown = rkWebUtil.elemaker( "select", this.m_span,
                                               { "change": () => { self.update_hist() } } );
 
-        p.appendChild( document.createTextNode( " s/n≥" ) );
-        this.snr_dropdown = rkWebUtil.elemaker( "select", p,
+        this.sn_span = rkWebUtil.elemaker( "span", p, { "classes": [ "displayinline" ] } );
+        this.sn_span.appendChild( document.createTextNode( " s/n≥" ) );
+        this.snr_dropdown = rkWebUtil.elemaker( "select", this.sn_span,
                                                 { "change": () => { self.update_hist() } } );
 
         this.update_strat_dropdown( null );
         this.update_dropdowns( null );
+        this.update_which_hist_wid( false );
         this.strat_dropdown.addEventListener( "change", () => { self.update_dropdowns();
                                                                 self.update_hist(); } );
+
+        rkWebUtil.elemaker( "p", this.topdiv, { "text": "Magnitudes & S/N values are for summed light across " +
+                                                "the indicated band." } )
 
         this.infodiv = rkWebUtil.elemaker( "div", this.topdiv );
 
         this.started = true;
     }
 
-    update_one_dropdown( dropdown, spechists, mindex, maxdex, deltadex, defbin=0, fixed=0, showhi=true )
+    update_one_dropdown( dropdown, spechists, mindex, maxdex, deltadex, defbin=0, fixed=0,
+                         showhi=true, extrabeginning={} )
     {
-        console.log( "update_one_dropdown, deltadex=" + deltadex );
         let self = this;
 
         let curbin = dropdown.value;
         let n = parseInt( ( spechists[maxdex] - spechists[mindex] ) / spechists[deltadex] + 0.5 );
         if ( ( curbin == null ) || ( curbin == undefined ) || ( curbin == "" ) || ( curbin >= n ) ) curbin = defbin;
         rkWebUtil.wipeDiv( dropdown );
+        for ( let i in extrabeginning ) {
+            let option = rkWebUtil.elemaker( "option", dropdown,
+                                             { "text": extrabeginning[i],
+                                               "attributes": { "value": i } } );
+            if ( i == curbin ) option.setAttribute( "selected", "selected" );
+        }
         for ( let i = 0 ; i < n ; ++i ) {
             let lo = spechists[mindex] + i * spechists[deltadex];
             let hi = ( lo + spechists[deltadex] ).toFixed(fixed);
@@ -1000,7 +1028,6 @@ snanasum.SpecSummary = class extends snanasum.InfoWindow
                 text += "–" + hi;
             let option = rkWebUtil.elemaker( "option", dropdown,
                                              { "text": text,
-                                               "change": () => { self.update_hist() },
                                                "attributes": { "value": i } } );
             if ( i == curbin ) option.setAttribute( "selected", "selected" );
         }
@@ -1008,7 +1035,6 @@ snanasum.SpecSummary = class extends snanasum.InfoWindow
 
     update_strat_dropdown( sim )
     {
-        console.log( "update_strat_dropdown for sim" + sim );
         if ( sim == null ) sim = this.collection.surveylist[0];
 
         let spechists = this.collection.surveys[sim]['spechists'];
@@ -1016,7 +1042,7 @@ snanasum.SpecSummary = class extends snanasum.InfoWindow
         let curstrat = this.strat_dropdown.value;
         if ( ( curstrat == null ) || ( curstrat == undefined ) || ( curstrat == "" ) ) curstrat = 0;
         if ( curstrat > spechists['spectrumhists'].length ) curstrat = 0;
-        rkWebUtil.wipeDiv( this.start_dropdown );
+        rkWebUtil.wipeDiv( this.strat_dropdown );
         for ( let i in spechists['spectrumhists'] ) {
             let text = "";
             for ( let tier in spechists['spectrumhists'][i] ) {
@@ -1032,7 +1058,6 @@ snanasum.SpecSummary = class extends snanasum.InfoWindow
 
     update_dropdowns( sim )
     {
-        console.log( "update_dropdowns for sim " + sim );
         // WARNING -- assumption that the bands and histogram limits are the same
         //   for all tiers.  The latter is true by construction in lib/parse_snana.py,
         //   but the former is set by the sims.  Currently, the sims are all done for
@@ -1050,6 +1075,7 @@ snanasum.SpecSummary = class extends snanasum.InfoWindow
         rkWebUtil.wipeDiv( this.band_dropdown );
         for ( let band in spechists['spectrumhists'][curstrat][tier] ) {
             if ( band == 'texpose' ) continue;
+            if ( band.substring( band.length-9 ) == 'restframe' ) continue;
             let option = rkWebUtil.elemaker( "option", this.band_dropdown,
                                              { "text": band + "-band",
                                                "attributes": { "value": band } } );
@@ -1059,7 +1085,7 @@ snanasum.SpecSummary = class extends snanasum.InfoWindow
         // let spectrumhist = spechists['spectrumhists'][curstrat][tier][curband];
 
         this.update_one_dropdown( this.z_dropdown, spechists,
-                                  "zmin", "zmax", "deltaz", 5, 2, true );
+                                  "zmin", "zmax", "deltaz", 5, 2, true, { '__all__': '(all)' } );
         this.update_one_dropdown( this.t_dropdown, spechists,
                                   "tobsmin", "tobsmax", "deltat", 3, 0, true );
         this.update_one_dropdown( this.m_dropdown, spechists,
@@ -1068,9 +1094,53 @@ snanasum.SpecSummary = class extends snanasum.InfoWindow
                                   "snrmin", "snrmax", "deltasnr", 10, 0, false );
     }
 
+
+    update_which_hist_wid( updatehist=true )
+    {
+        let allspans = [ 'z', 't', 'm', 'sn' ];
+        let shown;
+
+        if ( this.which_hist_wid.value == "z" ) {
+            shown = [ 't', 'sn' ];
+        }
+        else if ( this.which_hist_wid.value == "mag" ) {
+            shown = [ 't', 'z' ];
+        }
+        else if ( this.which_hist_wid.value == "snr" ) {
+            shown = [ 't', 'z' ];
+        }
+        else if ( this.which_hist_wid.value == "rest_phase_z" ) {
+            shown = [ 'sn' ];
+        }
+        else {
+            window.alert( "Unknown which_hist " + this.which_hist_wid.value + "; you should never see this error." );
+            shown = allspans;
+        }
+
+        for ( let span of allspans ) {
+            if ( shown.includes( span ) ) {
+                this[span+"_span"].classList.add( "displayinline" );
+                this[span+"_span"].classList.remove( "displaynone" );
+            }
+            else
+                this[span+"_span"].classList.remove( "displayinline" );
+                this[span+"_span"].classList.add( "displaynone" );
+        }
+
+        if ( updatehist )
+        this.update_hist();
+    }
+
+
     show_sim( sim )
     {
-        this.shown_sim = sim;
+        if ( !sim != this.shown_sim ) {
+            rkWebUtil.wipeDiv( this.infodiv );
+            this.shown_sim = sim;
+            this.update_strat_dropdown( sim );
+            this.update_dropdowns( sim );
+            this.update_which_hist_wid( false );
+        }
     }
 
     update_hist()
@@ -1083,6 +1153,7 @@ snanasum.SpecSummary = class extends snanasum.InfoWindow
         let curstrat = this.strat_dropdown.value;
         let curband = this.band_dropdown.value;
         let zbin = this.z_dropdown.value;
+        let tframe = this.t_restorobs_dropdown.value;
         let tbin = this.t_dropdown.value;
         let mbin = this.m_dropdown.value;
         let snrbin = this.snr_dropdown.value;
@@ -1092,7 +1163,7 @@ snanasum.SpecSummary = class extends snanasum.InfoWindow
                        + this.shown_sim + "/" + curstrat
                        + "/tier=__ALL__/zbin=" + zbin + "/tbin=" + tbin
                        + "/magbin=" + mbin + "/snrbin=" + snrbin + "/band=" + curband
-                       + "/gentype=" + gentype );
+                       + "/gentype=" + gentype + "/tframe=" + tframe );
 
         let img = rkWebUtil.elemaker( "img", this.infodiv,
                                       { "classes": [ "zhist" ],
@@ -1123,308 +1194,10 @@ snanasum.SpecPlot = class extends snanasum.InfoWindow
     }
 }
 
-// // **********************************************************************
-// // **********************************************************************
-// // **********************************************************************
-//
-// snanasum.specSurveyPlotsAndData = function( collection, parentdiv, simname, sim )
-// {
-//     let metahbox, hbox, vbox, div;
-//
-//     let self = this;
-//
-//     this.parentdiv = parentdiv;
-//     this.collection = collection;
-//     this.simname = simname;
-//     this.sim = sim;
-//     if ( sim == null ) {
-//         window.alert( "Error, sim is null, this shouldn't happen." );
-//     }
-//
-//     this.maindiv = rkWebUtil.elemaker( "div", parentdiv );
-//
-//     if ( ( ! this.sim.hasOwnProperty( 'spechists' ) ) ||
-//          ( ! this.sim.spechists.hasOwnProperty( 'tiers' ) ) ) {
-//         let p = rkWebUtil.elemaker( "p", this.maindiv, { "text": "(No spectrum survey info available.)" } );
-//         return;
-//     }
-//
-//     metahbox = rkWebUtil.elemaker( "div", this.maindiv, { "classes": [ "hbox" ],
-//                                                         "text": "Histogram for: " } );
-//     vbox = rkWebUtil.elemaker( "div", metahbox, { "classes": [ "vbox" ] } );
-//
-//     hbox = rkWebUtil.elemaker( "div", vbox, { "classes": [ "hbox" ] } );
-//
-//     this.which_hist_dropdown = rkWebUtil.elemaker( "select", hbox, { "change": function() { self.render(); } } );
-//     rkWebUtil.elemaker( "option", this.which_hist_dropdown, { "text": "Magnitudes",
-//                                                               "attributes": { "value": "mag" } } );
-//     rkWebUtil.elemaker( "option", this.which_hist_dropdown, { "text": "S/N",
-//                                                               "attributes": { "value": "snr" } } );
-//     rkWebUtil.elemaker( "option", this.which_hist_dropdown, { "text": "zHEL",
-//                                                               "attributes": { "value": "z",
-//                                                                               "selected": "selected" } } );
-//     // TODO : t obs?
-//
-//     this.hist_tier_dropdown = rkWebUtil.elemaker( "select", hbox, { "change": function() { self.render(); } } );
-//     rkWebUtil.elemaker( "option", this.hist_tier_dropdown, { "text": "All Tiers",
-//                                                              "attributes": { "value": "__ALL__",
-//                                                                              "selected": "selected" } } );
-//     for ( let tier of Object.keys( this.sim.spechists.tiers ) ) {
-//         rkWebUtil.elemaker( "option", this.hist_tier_dropdown, { "text": tier,
-//                                                                  "attributes": { "value": tier } } )
-//     }
-//
-//     this.prism_dropdown = rkWebUtil.elemaker( "select", hbox, { "change": function() { self.render(); } } );
-//     this.update_prism_dropdown( "__init__" );
-//
-//     this.band_dropdown = rkWebUtil.elemaker( "select", hbox, { "change": function() { self.render(); } } );
-//     rkWebUtil.elemaker( "option", this.band_dropdown, { "text": "Z", "attributes": { "value": "Z" } } );
-//     rkWebUtil.elemaker( "option", this.band_dropdown, { "text": "Y", "attributes": { "value": "Y" } } );
-//     rkWebUtil.elemaker( "option", this.band_dropdown, { "text": "J", "attributes": { "value": "J",
-//                                                                                      "selected": "selected" } } );
-//     rkWebUtil.elemaker( "option", this.band_dropdown, { "text": "H", "attributes": { "value": "H" } } );
-//
-//     this.hist_gentype_dropdown = rkWebUtil.elemaker( "select", hbox, { "change": function() { self.render(); } } );
-//     this.update_hist_gentype_dropdown( 10 );
-//
-//     hbox = rkWebUtil.elemaker( "div", vbox, { "classes": [ "hbox" ] } );
-//
-//     this.tobswidbox = rkWebUtil.elemaker( "div", hbox );
-//     div = rkWebUtil.elemaker( "div", this.tobswidbox, { "classes": [ "hbox" ], "text": "t_obs:" } );
-//     this.tobswid = rkWebUtil.elemaker( "select", div, { "change": function() { self.render(); } } );
-//     this.update_tobswid( "__init__" );
-//
-//     this.snrwidbox = rkWebUtil.elemaker( "div", hbox );
-//     div = rkWebUtil.elemaker( "div", this.snrwidbox, { "classes": [ "hbox" ], "text": " S/N≥" } );
-//     this.snrwid = rkWebUtil.elemaker( "select", div, { "change": function() { self.render(); } } );
-//     this.update_snrwid( "__init__" );
-//
-//     this.zwidbox = rkWebUtil.elemaker( "div", hbox, { "classes": [ "dispnone" ] } );
-//     div = rkWebUtil.elemaker( "div", this.zwidbox,{ "classes": [ "hbox" ], "text": " z:" } );
-//     this.zwid = rkWebUtil.elemaker( "select", div, { "change": function() { self.render(); } } );
-//     this.update_zwid( "__init__" );
-//
-//     // TODO : mag wid?
-//
-//     this.infodiv = rkWebUtil.elemaker( "div", this.maindiv );
-//
-//     this.render();
-// };
-//
-// snanasum.specSurveyPlotsAndData.prototype.update_which_hist_dropdown_side_effects = function()
-// {
-//     let which = this.which_hist_dropdown.value;
-//
-//     if ( which == 'mag' ) {
-//         this.zwidbox.classList.remove( 'dispnone' );
-//         this.snrwidbox.classList.add( 'dispnone' );
-//     }
-//     else if ( which == 'snr' ) {
-//         this.zwidbox.classList.remove( 'dispnone' );
-//         this.snrwidbox.classList.add( 'dispnone' );
-//     }
-//     else if ( which == 'z' ) {
-//         this.snrwidbox.classList.remove( 'dispnone' );
-//         this.zwidbox.classList.add( 'dispnone' );
-//     }
-// }
-//
-// snanasum.specSurveyPlotsAndData.prototype.update_prism_dropdown = function( prism )
-// {
-//     let tier = this.hist_tier_dropdown.value;
-//     if ( tier == "__ALL__" ) tier = Object.keys( this.sim.spechists.tiers )[0];
-//
-//     let sel;
-//     if ( prism == "__init__" ) {
-//         sel = Object.keys( this.sim.spechists.tiers[tier] )[0];
-//     } else {
-//         sel = ( prism == null ) ? this.prism_dropdown.value : prism;
-//     }
-//
-//     let firstoption = null;
-//     let foundsel = false;
-//
-//     rkWebUtil.wipeDiv( this.prism_dropdown );
-//     for ( let prismoption of Object.keys( this.sim.spechists.tiers[tier] ) ) {
-//         let option = rkWebUtil.elemaker( "option", this.prism_dropdown, { "text": prismoption,
-//                                                                           "attributes": { "value": prismoption } } );
-//         firstoption = ( firstoption == null ) ? option : firstoption;
-//         if ( sel == prismoption ) {
-//             option.setAttribute( "selected", "selected" );
-//             foundsel = true;
-//         }
-//     }
-//     if ( ! foundsel ) firstoption.setAttribute( "selected", "selected" );
-// }
-//
-// snanasum.specSurveyPlotsAndData.prototype.update_hist_gentype_dropdown = function( gentype ) {
-//     let option;
-//     let gt10 = null;
-//
-//     let tier = this.hist_tier_dropdown.value;
-//     if ( tier == "__ALL__" ) tier = Object.keys( this.sim.spechists.tiers )[0];
-//
-//     let prism = this.prism_dropdown.value;
-//     let band = this.band_dropdown.value
-//
-//     let foundsel = false;
-//     let sel = ( gentype == null ) ? this.hist_gentype_dropdown.value : gentype;
-//
-//     rkWebUtil.wipeDiv( this.hist_gentype_dropdown );
-//     option = rkWebUtil.elemaker( "option", this.hist_gentype_dropdown, { "text": "All Types",
-//                                                                          "attributes": { "value": "__ALL__" } } );
-//     if ( sel == "__ALL__" ) {
-//         option.setAttribute( "selected", "selected" );
-//         foundsel = true;
-//     }
-//     option = rkWebUtil.elemaker( "option", this.hist_gentype_dropdown, { "text": "All But Ia",
-//                                                                          "attributes": { "value": "__ALLBUTIA__" } } );
-//     if ( sel == "__ALLBUTIA__" ) {
-//         option.setAttribute( "selected", "selected" );
-//         foundsel = true;
-//     }
-//
-//     let gentypes = Array.from( new Set( this.sim.spechists.tiers[tier][prism][band]['GENTYPE'] ) );
-//     gentypes.sort();
-//
-//     for ( let gentype of gentypes ) {
-//         option = rkWebUtil.elemaker( "option", this.hist_gentype_dropdown,
-//                                      { "text": this.sim.gentypemap[gentype],
-//                                        "attributes": { "value": gentype } } );
-//         if ( gentype == 10 ) gt10 = option;
-//         if ( gentype == sel ) {
-//             option.setAttribute( "selected", "selected" );
-//             foundsel = true;
-//         }
-//     }
-//     if ( ! foundsel ) {
-//         if ( gt10 == null ) {
-//             window.alert( "Didn't find SNIa! This is...surprising." );
-//         } else {
-//             gt10.setAttribute( "selected", "selected" );
-//         }
-//     }
-// };
-//
-// snanasum.specSurveyPlotsAndData.prototype.update_tobswid = function( tobs )
-// {
-//     let tbin, option;
-//
-//     let tmin = this.sim.spechists.tobsmin;
-//     let tmax = this.sim.spechists.tobsmax;
-//     let deltat = this.sim.spechists.deltat;
-//     let zerobin = Math.floor( - tmin / deltat );
-//
-//     if ( tobs == "__init__" ) {
-//         tbin = zerobin;
-//     } else {
-//         if ( tobs != null ) {
-//             tbin = Math.floor( ( tobs - tmin ) / deltat + 0.5 );
-//         }
-//         else {
-//             tbin = this.tobswid.value;
-//         }
-//     }
-//
-//     rkWebUtil.wipeDiv( this.tobswid )
-//     let curtbin = 0;
-//     for ( let t = tmin ; t <= tmax ; t += deltat, curtbin += 1 ) {
-//         option = rkWebUtil.elemaker( "option", this.tobswid,
-//                                      { "text": t.toString() + ".." + (t+deltat).toString() + " d",
-//                                        "attributes": { "value": curtbin } } );
-//         if ( tbin == curtbin ) {
-//             option.setAttribute( "selected", "selected" );
-//         }
-//     }
-// };
-//
-// snanasum.specSurveyPlotsAndData.prototype.update_snrwid = function( snr )
-// {
-//     let option, snrbin;
-//
-//     let snrmin = this.sim.spechists.snrmin;
-//     let snrmax = this.sim.spechists.snrmax;
-//     let deltasnr = this.sim.spechists.deltasnr;
-//
-//     if ( snr == "__init__" ) snr = 0;
-//     if ( snr == null ) snrbin = this.snrwid.value;
-//     else snrbin = Math.floor( ( snr - snrmin ) / deltasnr + 0.5 );
-//
-//     rkWebUtil.wipeDiv( this.snrwid );
-//     let cursnrbin = 0;
-//     for ( let s = snrmin ; s <= snrmax ; s += deltasnr, cursnrbin += 1 ) {
-//         option = rkWebUtil.elemaker( "option", this.snrwid,
-//                                      { "text": s,
-//                                        "attributes": { "value": cursnrbin } } );
-//         if ( snrbin == cursnrbin ) {
-//             option.setAttribute( "selected", "selected" );
-//         }
-//     }
-// }
-//
-// snanasum.specSurveyPlotsAndData.prototype.update_zwid = function( z )
-// {
-//     let option, zbin;
-//
-//     let zmin = this.sim.spechists.zmin;
-//     let zmax = this.sim.spechists.zmax;
-//     let deltaz = this.sim.spechists.deltaz;
-//
-//     if ( z == "__init__" ) zbin = 5;
-//     if ( z == null ) zbin = this.zwid.value;
-//     else zbin = Math.floor( ( z - zmin ) / deltaz + 0.5 );
-//
-//     rkWebUtil.wipeDiv( this.zwid );
-//     let curzbin = 0;
-//     for ( let curz = zmin; curz <= zmax ; curz += deltaz, curzbin += 1 ) {
-//         option = rkWebUtil.elemaker( "option", this.zwid,
-//                                      { "text": curz.toFixed(2) + "-" + (curz+deltaz).toFixed(2),
-//                                        "attributes": { "value": curzbin } } );
-//         if ( zbin == curzbin ) {
-//             option.setAttribute( "selected", "selected" );
-//         }
-//     }
-// };
-//
-// snanasum.specSurveyPlotsAndData.prototype.render = function()
-// {
-//     rkWebUtil.wipeDiv( this.infodiv );
-//
-//     let p = rkWebUtil.elemaker( "p", this.invodiv,
-//                                 { "text": "Warning: core-collapse SNe numbers are not scaled right. " +
-//                                   "Also, the 'debug' collection just has a subset of object counts for everything.",
-//                                   "classes": [ "italic" ] } );
-//     let div = rkWebUtil.elemaker( "div", this.infodiv, { "classes": [ "zhist-img-container" ] } );
-//
-//     this.update_which_hist_dropdown_side_effects();
-//     this.update_prism_dropdown( null );
-//     this.update_hist_gentype_dropdown( null );
-//     this.update_tobswid( null );
-//     this.update_snrwid( null );
-//     this.update_zwid( null );
-//
-//     let whichplot = this.which_hist_dropdown.value;
-//     let tier = this.hist_tier_dropdown.value;
-//     let prism = this.prism_dropdown.value;
-//     let band = this.band_dropdown.value;
-//     let gentype = this.hist_gentype_dropdown.value;
-//     let tobsbin = this.tobswid.value;
-//     let snrbin = this.snrwid.value;
-//     let zbin = this.zwid.value;
-//
-//     let imgurl = "/spechist/" + whichplot + "/" + this.collection.collection + "/" + this.simname
-//         + "/tbin=" + tobsbin + "/snrbin=" + snrbin + "/zbin=" + zbin + "/gentype=" + gentype
-//         + "/tier=" + tier + "/prism=" + prism + "/band=" + band;
-//     // console.log( "Asking for image " + imgurl );
-//     let img = rkWebUtil.elemaker( "img", div,
-//                                   { "classes": [ "zhist" ],
-//                                     "attributes": { "src": imgurl,
-//                                                     "width": 600,
-//                                                     "height": 500,
-//                                                     "alt": "[spectrum histogram]" } } );
-//
-//
-// };
+
+// **********************************************************************
+// **********************************************************************
+// **********************************************************************
 
 
 export {snanasum}

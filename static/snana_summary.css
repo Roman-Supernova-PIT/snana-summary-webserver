@@ -8,6 +8,7 @@
     --lots-faded-color: #aaaaaa;
     --most-faded-color: #dddddd;
     --blue-color: #000088;
+    --warning-color: #886600;
 }
 
 body { background: var(--background-color);
@@ -25,8 +26,14 @@ body { background: var(--background-color);
 .lotsfaded { background-color: var(--lots-faded-color) }
 .mostfaded { background-color: var(--most-faded-color) }
 
+.warning { color: var(--warning-color) }
+
 .bold { font-weight: bold }
 .italic { font-style: italic }
+
+.displaynone { display: none }
+.displayblock { display: block }
+.displayinline { display: inline }
 
 .hidecolumn { display: none }
 .showcolumn { display: table-cell }
