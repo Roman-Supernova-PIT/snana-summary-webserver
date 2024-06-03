@@ -397,7 +397,9 @@ class RomanSurveySummary:
     def _read_spec( self, collection, survey_version, tiers ):
         """Read spectrum information.
 
-        Returns a dictionary:
+        Returns two dictionaries: spechists, spectiercids
+
+        spechists:
           { 'zmin': float,       # z of left edge of low bin
             'zmax': float,       # z of ? edge of high bin (gratuitous)
             'deltaz': float,     # z bin width
@@ -431,6 +433,13 @@ class RomanSurveySummary:
                             ... }
                    } ]
         }
+
+        spectiercids:
+          { tier: [ [ cid1, cid2, cid3 ] ] }
+
+              If there are tiers 'SHALLOW' and 'DEEP', and three spectrum strategies, then
+              spectiercids['DEEP'][1] is a list of all cids that were taken as part of the
+              second spectrum strategy of objects in the 'DEEP' subset.
 
 
         """
@@ -551,7 +560,37 @@ class RomanSurveySummary:
 
         hist[ 'spectrumhists' ] = specstrat
 
-        return hist
+        spectiercids = {}
+        for tier in specdf['FIELD'].unique():
+            tiersentry = None
+            for ent in tiers:
+                if ent['name'] == tier:
+                    tiersentry = ent
+                    break
+            else:
+                # This should never happen; exception would have been raised before.
+                raise RuntimeError( f"Tier {tier} in specdf is not in tiers." )
+
+            spectiercids[ tier ] = []
+            for i, specstrat in enumerate( range(ntexpose) ):
+                # I'm going to be doing a float comparison for texpose, which is scary.
+                #   However, I expect these floating point numbers to all be integers,
+                #   and 32-bit floats can perfectly represent integers up to 2^23-1,
+                #   or 8388607, and no exposure time will ever be that long.
+                texpose = tiersentry['texpose_prism'][i]
+                # Explicitly convert to int just in case it's a string,
+                #   which I've seen for ids in SNANA sometimes
+                try:
+                    spectiercids[ tier ].append( [ int(j) for j in
+                                                   list( specdf[ ( specdf['FIELD'] == tier ) &
+                                                                 ( specdf['TEXPOSE'] == texpose ) ]['CID']
+                                                         .unique() ) ] )
+                except Exception as ex:
+                    import pdb; pdb.set_trace()
+                    pass
+
+
+        return hist, spectiercids
 
 
     def read_files( self, collection, snana_outdir, regen=False, savecache=True, clobber=False ):
@@ -616,10 +655,12 @@ class RomanSurveySummary:
                                                       'NLIBID': int,
                                                       'zSNRMATCH': float,
                                                       'OpenFrac': float,
+                                                    }
+                                            }
                                    'zhist': { 'tier': [...], 'gentype': [...], 'zCMB': [...], 'n': [...] },
                                    'snrmaxzhist': { <same structure as zhist> },
                                    'snrmaxz2hist': { <same structure as zhist> },
-                                   'snrmaxz3hist': { <same structure as zhist> {,
+                                   'snrmaxz3hist': { <same structure as zhist> },
                                    'spechists': { <see _read_spec> },
                                    'gentypemap' : { gentype: name, ... },
                                    'long_survey_version' : <str>,
@@ -628,7 +669,9 @@ class RomanSurveySummary:
                                                  (bunch of cosmology keys, including 'FoM_stat') }
                                             ]
 
-                         }
+                         } },
+             'spectiercids': { survey_name: { see _read_spec} },
+           }
 
         The zhist thingies are set up to be easy to convert to a Pandas dataframe.
 
@@ -661,6 +704,7 @@ class RomanSurveySummary:
         # Start building the individual surveys
 
         surveys = {}
+        spectiercids = {}
         for ai, relarea in enumerate( tiers[0]['relarea'] ):
             for ti, dt_visit in enumerate( tiers[0]['dt_visit'] ):
                 for zi, z_snrmatch in enumerate( tiers[0]['z_snrmatch'] ):
@@ -691,9 +735,9 @@ class RomanSurveySummary:
                         surveys[short_survey_version]['snrmax2zhist'] = snrmax2zhist
                         surveys[short_survey_version]['snrmax3zhist'] = snrmax3zhist
                         surveys[short_survey_version]['long_survey_version'] = survey_version
-                        surveys[short_survey_version]['spechists'] = self._read_spec( collection,
-                                                                                      survey_version,
-                                                                                      tiers )
+                        spechists, this_spectiercids = self._read_spec( collection, survey_version, tiers )
+                        surveys[short_survey_version]['spechists'] = spechists
+                        spectiercids[short_survey_version] = this_spectiercids
                     except Exception as ex:
                         strio = io.StringIO()
                         strio.write( f"Failed to get survey info for {short_survey_version}; Exception: " )
@@ -740,12 +784,14 @@ class RomanSurveySummary:
             'tiers': tiers,
             'instrinfo': instrinfo,
             'analysisinfo': analysisinfo,
-            'surveys': surveys }
+            'surveys': surveys,
+            'spectiercids': spectiercids
+        }
 
         # Save to cache dir
 
         if savecache:
-            for attr in ( 'surveyinfo', 'tiers', 'instrinfo', 'analysisinfo', 'surveys' ):
+            for attr in ( 'surveyinfo', 'tiers', 'instrinfo', 'analysisinfo', 'surveys', 'spectiercids' ):
                 with open( self.outdir / f'{collection}_{attr}.json', 'w' ) as ofp:
                     json.dump( self.collections[collection][attr], ofp, cls=NumpyEncoder )
 
