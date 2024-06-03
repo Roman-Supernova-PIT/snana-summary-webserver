@@ -564,7 +564,10 @@ snanasum.PhotSummary = class extends snanasum.InfoWindow
     show_sim( sim )
     {
         let self = this;
-        if ( sim == this.shown_sim ) return;
+        // Remove this next if statement; show_sim is
+        //   called when plot parmeters are changed, not just when
+        //   the sim is changed.
+        // if ( sim == this.shown_sim ) return;
 
         let p, div, hbox, table, tr, th, td;
 
@@ -768,7 +771,19 @@ snanasum.LtcvPlot = class extends snanasum.InfoWindow
                                               { "attributes":
                                                 { "value": 0.5,
                                                   "size": 5 } } );
-        rkWebUtil.elemaker( "span", p, { "text": "±0.1" } );
+        rkWebUtil.elemaker( "span", p, { "text": "±0.1  from tier: " } );
+
+        this.tier_dropdown = rkWebUtil.elemaker( "select", p );
+        rkWebUtil.elemaker( "option", this.hist_tier_dropdown, { "text": "(any tier)",
+                                                                 "attributes": { "value": "__ALL__",
+                                                                                 "selected": "selected" } } );
+        let tmpsurvey = this.collection.surveys[ this.collection.surveylist[0] ];
+        for ( let tier of Object.keys( tmpsurvey['tiers'] ) ) {
+            rkWebUtil.elemaker( "option", this.tier_dropdown, { "text": tier,
+                                                                "attributes": { "value": tier } } );
+        }
+
+
 
         this.ltcv_plot_div = rkWebUtil.elemaker( "div", this.topdiv );
     }
@@ -789,14 +804,18 @@ snanasum.LtcvPlot = class extends snanasum.InfoWindow
         let self = this;
 
         rkWebUtil.wipeDiv( this.ltcv_plot_div );
+        rkWebUtil.elemaker( "h3", this.ltcv_plot_div, { "text": "Loading...",
+                                                        "classes": [ "bold", "italic", "warning" ] } );
 
         // TODO : reafactor all this code so that it all makes more snese
         let sim = this.shown_sim;
         let connector = new rkWebUtil.Connector( "/randomltcv" )
         let gentype = this.gentype_dropdown.value;
         let z = this.ltcv_z_wid.value;
-        connector.sendHttpRequest( "/" + this.collection.collection + "/" + sim + "/" + gentype + "/" + z + "/0.1",
-                                   {}, (data) => { self.actually_plot_random_ltcv( data ) } );
+        let tier = this.tier_dropdown.value;
+        let url = "/" + this.collection.collection + "/" + sim + "/" + gentype + "/" + z + "/0.1";
+        if ( tier != "__ALL__" ) url += "/" + tier;
+        connector.sendHttpRequest( url, {}, (data) => { self.actually_plot_random_ltcv( data ) } );
     }
 
 
@@ -824,8 +843,10 @@ snanasum.LtcvPlot = class extends snanasum.InfoWindow
                              'K' : 'uptriangle'
                            };
 
+        rkWebUtil.wipeDiv( this.ltcv_plot_div );
+
         h3 = rkWebUtil.elemaker( "h3", this.ltcv_plot_div,
-                                 { "text": "Obj " + data['snid'] + " at z_cmb=" + data['zcmb'].toFixed(2) } )
+                                 { "text": "Obj " + data['snid'] + " at z_cmb=" + data['snz'].toFixed(2) } )
 
         let have_filts = [];
         for ( let filt of known_filters )
@@ -1184,14 +1205,136 @@ snanasum.SpecPlot = class extends snanasum.InfoWindow
     constructor( collection, topdiv )
     {
         super( collection, topdiv, false, false );
+
+        var self = this;
+
         this.shown_sim = null;
 
-        rkWebUtil.elemaker( "p", this.topdiv, { "text": "Spectrum plotting not implemented." } );
+        let p, button;
+
+        p = rkWebUtil.elemaker( "p", this.topdiv );
+        button = rkWebUtil.button( p, "Find and plot", () => { self.plot_random_spectrum() } );
+        rkWebUtil.elemaker( "span", p, { "text": " a spectrum of type " } );
+        this.gentype_dropdown = rkWebUtil.elemaker( "select", p );
+        this.update_gentype_dropdown( null, 10 );
+        rkWebUtil.elemaker( "span", p, { "text": " at z= " } );
+        this.z_wid = rkWebUtil.elemaker( "input", p, { "attributes": { "value": 0.5,
+                                                                       "size": 5, } } );
+        rkWebUtil.elemaker( "span", p, { "text": "±0.1 and t_" } );
+        this.t_frame_wid = rkWebUtil.elemaker( "select", p );
+        rkWebUtil.elemaker( "option", this.t_frame_wid, { "text": "rest", "attributes": { "value": "rest",
+                                                                                          "selected": "selected" } } );
+        rkWebUtil.elemaker( "option", this.t_frame_wid, { "text": "obs", "attributes": { "value": "obs" } } );
+        rkWebUtil.elemaker( "span", p, { "text": "= " } );
+        this.t_wid = rkWebUtil.elemaker( "input", p, { "attributes": { "value": 0.,
+                                                                       "size": 5, } } );
+        rkWebUtil.elemaker( "span", p, { "text": "±5 days" } );
+
+        p = rkWebUtil.elemaker( "p", this.topdiv );
+        rkWebUtil.elemaker( "span", p, { "text": "     From survey tier " } );
+        this.tier_dropdown = rkWebUtil.elemaker( "select", p );
+        rkWebUtil.elemaker( "option", this.tier_dropdown, { "text": "(any tier)",
+                                                            "attributes": { "value": "__ALL__",
+                                                                            "selected": "selected" } } );
+        let tmpsurvey = this.collection.surveys[ this.collection.surveylist[0] ];
+        for ( let tier of Object.keys( tmpsurvey['tiers'] ) ) {
+            rkWebUtil.elemaker( "option", this.tier_dropdown, { "text": tier,
+                                                                "attributges": { "value": tier } } );
+        }
+        rkWebUtil.elemaker( "span", p, { "text": " and spectrum strategy " } )
+        this.specstrat_dropdown = rkWebUtil.elemaker( "select", p );
+        rkWebUtil.elemaker( "option", this.specstrat_dropdown, { "text": "(any)",
+                                                                 "attributes": { "value": "__ALL__",
+                                                                                 "selected": "selected" } } );
+        for ( let specstrati in tmpsurvey['spechists']['spectrumhists'] ) {
+            let text = "";
+            for ( let tier in tmpsurvey['spechists']['spectrumhists'][specstrati] ) {
+                let texp = tmpsurvey['spechists']['spectrumhists'][specstrati][tier]['texpose'];
+                text += "t_exp(" + tier + ")=" + texp + " " ;
+            }
+            rkWebUtil.elemaker( "option", this.specstrat_dropdown, { "text": text,
+                                                                     "attributes": { "value": specstrati } } );
+        }
+
+        // ****
+        rkWebUtil.elemaker( "p", this.topdiv, { "text": "Note: asking for a specific spectrum strategy is currently broken.",
+                                                "classes": [ "italic" ] } );
+        // ****
+
+        this.spec_plot_div = rkWebUtil.elemaker( "div", this.topdiv );
     }
 
     show_sim( sim )
     {
+        if ( sim != this.shown_sim ) {
+            rkWebUtil.wipeDiv( this.spec_plot_div );
+            this.shown_sim = sim;
+        }
     }
+
+    plot_random_spectrum()
+    {
+        let self = this;
+
+        rkWebUtil.wipeDiv( this.spec_plot_div );
+        rkWebUtil.elemaker( "h3", this.spec_plot_div, { "text": "Loading...",
+                                                        "classes": [ "bold", "italic", "warning" ] } );
+
+        let sim = this.shown_sim;
+        let connector = new rkWebUtil.Connector( "/randomspectrum" )
+        let gentype = this.gentype_dropdown.value;
+        let z = this.z_wid.value;
+        let t = this.t_wid.value;
+        let tframe = this.t_frame_wid.value;
+        let tier = this.tier_dropdown.value;
+        let specstrat = this.specstrat_dropdown.value;
+
+        let url = "/" + this.collection.collection + "/" + sim + "/" + gentype + "/" + z + "/0.1" +
+            "/" + t + "/5/tframe=" + tframe;
+        if ( tier != "__ALL__" ) url += "/tier=" + tier;
+        if ( specstrat != "__ALL__" ) url += "/specstrat=" + specstrat;
+
+        connector.sendHttpRequest( url, {}, (data) => { self.actually_plot_random_spectrum( data ) } );
+    }
+
+    actually_plot_random_spectrum( data )
+    {
+        let self = this;
+
+        rkWebUtil.wipeDiv( this.spec_plot_div );
+
+        // ****
+        console.log( "specfile=" + data['specfile'] + ", snid= " + data['snid'] +
+                     ", ptrspec_min=" + data['ptrspec_min'] + ", ptrspec_max=" + data['ptrspec_max'] );
+        // ****
+
+        rkWebUtil.elemaker( "h3", this.spec_plot_div,
+                            { "text": "Obj " + data['snid'] + " at z_cmb=" + data['snz'].toFixed(2)
+                              + ", Δt_obs=" + data['specdt'].toFixed(1) + " days, Δt_rest="
+                              + data['specdtrest'].toFixed(1) + " days" } );
+        rkWebUtil.elemaker( "p", this.spec_plot_div,
+                            { "text": "t_exp=" + data['spec_texp'].toFixed(0) + " s; spechost_contam="
+                              + data['spechost_contam'].toFixed(3) } );
+
+
+        let x = [];
+        let y = [];
+        let dy = [];
+        for ( let i in data.spectrum.lammin ) {
+            x.push( ( data.spectrum.lammin[i] + data.spectrum.lammax[i] ) / 2. );
+            y.push( data.spectrum.flam[i] );
+            // dy.push( data.spectrum.flamerr[i] );
+        }
+        let ds = new SVGPlot.Dataset( { 'x': x, 'y': y, 'dy': dy,
+                                        'color': '#000066', 'highlight_color': '#6666cc',
+                                        'linewid': 2, 'marker': null } );
+
+        this.spec_svgplot = new SVGPlot.Plot( { "xtitle": "λ_obs",
+                                                "ytitle": "F_λ × 10²⁰" } );
+        this.spec_plot_div.appendChild( this.spec_svgplot.topdiv );
+        this.spec_svgplot.addDataset( ds );
+    }
+
 }
 
 

@@ -23,6 +23,7 @@ import flask
 import flask.views
 
 from astropy.io import fits
+import astropy.table
 
 workdir = pathlib.Path( __name__ ).resolve().parent
 
@@ -44,7 +45,7 @@ class BaseView(flask.views.View):
                     return f'error parsing url argument {arg}, must be key=value', 500
                 kwargs[ match.group('k') ] = match.group('v')
         if flask.request.is_json:
-            kwargs.update( flask.request.json() )
+            kwargs.update( flask.request.json )
         return kwargs
 
     def readjson( self, collection, which ):
@@ -484,8 +485,6 @@ class SpecHist(BaseView):
             else:
                 masterdf = masterdf.add( gtsumdf, fill_value=0 )
 
-        # app.logger.debug( f'masterdf=\n{masterdf}\n{masterdf.unstack(level=tbin)}' )
-
         # Make sure that the index values are continuous, so that imshow will be meaningful
         zbinvals = masterdf.index.get_level_values( level='zbin' ).values
         zbinmin = zbinvals.min()
@@ -501,20 +500,14 @@ class SpecHist(BaseView):
 
         template = pandas.DataFrame( { 'zbin': zbinvals, tbin: tbinvals, 'n': [0]*len(tbinvals)  } )
         template.set_index( [ 'zbin', tbin ], inplace=True )
-        # app.logger.debug( f'template=\n{template}\n{template.unstack(level=tbin)}' )
         masterdf = masterdf.reindex_like( template )
         masterdf[ masterdf.isna() ] = 0
         grid = masterdf.unstack( level=tbin, fill_value=0 )
-
-        # app.logger.debug( f'grid=\n{grid}\n' )
-        # app.logger.debug( f'zbinmin={zbinmin}, zbinmax={zbinmax}, tbinmin={tbinmin}, tbinmax={tbinmax}' )
 
         zlo = zmin + zbinmin * dz
         zhi = zmin + (zbinmax+1) * dz
         tlo = tmin + tbinmin * dt
         thi = tmin + (tbinmax+1) * dt
-
-        # app.logger.debug( f'zlo={zlo}, zhi={zhi}, dz={dz}, tlo={tlo}, thi={thi}, dt={dt}' )
 
         # OK, plot
 
@@ -546,95 +539,188 @@ class SpecHist(BaseView):
 
 # ======================================================================
 
-class RandomLTCV(BaseView):
-    def dispatch_request( self, collection, sim, gentype, z, dz ):
+class RandomObject:
+    def find_random_object( self, collection, sim, gentype, z, dz, tier=None, specstrat=None, spect=0., specdt=1.,
+                            tframe='rest', need_spec=False ):
+        retval = {}
+
+        gentype = int(gentype)
+        z = float(z)
+        dz = float(dz)
+        specstrat = None if specstrat is None else int(specstrat)
+
+        # TODO : update this to when there is more than one collection sim dir
+
+        # HACK ALERT : update this when collection names are more coherent
+
+        # app.logger.debug( f"gentype={gentype}, z={z}, dz={dz}" )
+
+        simcomps = sim.strip().split()
+        app.logger.debug( f"collection={collection}, sim={sim}" )
+        app.logger.debug( f"collection={collection}, sim={sim}, simcomps[1]={simcomps[1]}" )
+        subdir = pathlib.Path( "/snana_sim" ) / f'ROMAN_{collection}_DATA-{simcomps[1]}'
+        g = [ i for i in subdir.glob( "*.README" ) ]
+        if len(g) == 0:
+            app.logger.error( f"Couldn't find a *.README file in {subdir}" )
+            raise RuntimeError( "Error parsing snana output data" )
+        if len(g) > 1:
+            app.logger.error( f"Found more than one *.README file in {subdir}" )
+            raise RuntimeError( "Error parsing snana output data" )
+
+        with open( g[0] ) as ifp:
+            blob = yaml.safe_load( ifp.read() )
+
+        model = None
+        for key in blob['DOCUMENTATION'].keys():
+            if key[0:11] == "INPUT_KEYS_":
+                if blob['DOCUMENTATION'][key]['GENTYPE'] == gentype:
+                    model = key[11:]
+                    app.logger.debug( f"Found gentype {gentype} as model {model}" )
+
+        if model is None:
+            app.logger.error( f"Couldn't find model for gentype {gentype}" )
+            raise RuntimeError( "Couldn't find snana files for type" )
+
+        # If tier is not None, then we have to read the DUMP file
+        if tier is not None:
+            g = [ i for i in subdir.glob( f"*DUMP*" ) ]
+            if len(g) != 1:
+                raise RuntimeError( "There are {len(g)} DUMP files, expected exactly 1." )
+            dump = pandas.read_csv( g[0], sep='\s+', comment='#' )
+            dump.set_index( 'CID', inplace=True )
+
+        # If need_spec is True then we need to read the cache of spectrum CIDs
+        if need_spec:
+            app.logger.debug( f"sim={sim}" )
+            spectiercids = json.loads( self.readjson( collection, 'spectiercids' ) )
+            spectiercids = spectiercids[ sim ]
+
+        # TODO : assuming gzipped, fix that
+        g = [ i for i in subdir.glob( f"ROMAN_{model}-*_HEAD.FITS.gz" ) ]
+        random.shuffle( g )
+
+        if need_spec and (specstrat is not None):
+            instrat = set()
+            if tier is not None:
+                tierstosearch = [ tier ]
+            else:
+                tierstosearch = list( spectiercids.keys() )
+            app.logger.debug( f"tierstosearch={tierstosearch}, specstrat={specstrat}" )
+            for searchtier in tierstosearch:
+                # I hope these cids are integers...
+                instrat = instrat.union( set( spectiercids[searchtier][specstrat] ) )
+            instrat = numpy.array( list(instrat), dtype=numpy.int64 )
+            app.logger.debug( f"instrat = {instrat}" )
+
+        found = False
+        for headfile in g:
+            app.logger.debug( f"Searching file {headfile}" )
+            photfile = headfile.parent / headfile.name.replace( '_HEAD.FITS.gz', '_PHOT.FITS.gz' )
+            specfile = headfile.parent / headfile.name.replace( '_HEAD.FITS.gz', '_SPEC.FITS' )
+            tab = astropy.table.Table.read( headfile )
+            tab['SNID'] = tab['SNID'].astype( numpy.int64 )
+
+            spechead = None
+            if need_spec:
+                specfname = headfile.name.replace( "_HEAD.FITS.gz", "_SPEC.FITS" )
+                app.logger.debug( f"Reading spectrum file {specfname}" )
+                with fits.open( headfile.parent / specfname, memmap=True ) as sf:
+                    spechead = astropy.table.Table( sf[1].data )
+                    spechead['SNID'] = spechead['SNID'].astype( numpy.int64 )
+                app.logger.debug( f"spectiercids.keys()={spectiercids.keys()}" )
+                if specstrat is not None:
+                    tab = tab[ [ i in instrat for i in tab['SNID'] ] ]
+                    app.logger.debug( f"After cutting, len(tab) = {len(tab)}" )
+            rightz = tab[ ( tab['SIM_REDSHIFT_CMB'] >= z - dz ) & ( tab['SIM_REDSHIFT_CMB'] <= z + dz ) ]
+            app.logger.debug( f"len(rightz)={len(rightz)}" )
+            if len(rightz) == 0:
+                continue
+
+            dexen = list( range( 0, len(rightz) ) )
+            random.shuffle( dexen )
+            for dex in dexen:
+                if rightz[dex]['SIM_GENTYPE'] != gentype:
+                    app.logger.error( f"gentype mismatch error" )
+                    raise RuntimeError( "Gentype from HEAD file didn't match expected" )
+
+                if tier is not None:
+                    # Make sure the SN is from the right tier
+                    if dump.loc[ rightz[dex]['SNID'], 'FIELD' ] != tier:
+                        continue
+
+                if not need_spec:
+                    found = True
+                    break
+                else:
+                    objspecs = spechead[ spechead['SNID'] == rightz[dex]['SNID'] ]
+                    if len( objspecs ) > 0:
+                        dts = objspecs['MJD'] - rightz[dex]['SIM_PEAKMJD']
+                        if tframe == "rest":
+                            dts /= ( 1. + rightz[dex]['SIM_REDSHIFT_HELIO'] )
+                        gooddts = numpy.where( ( dts <= spect + specdt ) & ( dts >= ( spect - specdt ) ) )[0]
+                        if len( gooddts ) > 0:
+                            random.shuffle( gooddts )
+                            spechead = objspecs[ gooddts[0] ]
+                            found = True
+                            break
+
+
+            if found:
+                retval = {
+                    'headfile': headfile,
+                    'photfile': photfile,
+                    'tier': 'Any' if tier is None else tier,
+                    'snid': int( rightz[dex]['SNID'] ),
+                    'ptrobs_min': int( rightz[dex]['PTROBS_MIN'] ) - 1,
+                    'ptrobs_max': int( rightz[dex]['PTROBS_MAX'] ),
+                    'snz': float( rightz[dex]['SIM_REDSHIFT_CMB'] ),
+                    'mwebv': float( rightz[dex]['SIM_MWEBV'] ),
+                    'av': float( rightz[dex]['SIM_AV'] ),
+                    'rv': float( rightz[dex]['SIM_RV'] ),
+                }
+
+                if need_spec:
+                    retval.update( {
+                        'specfile': specfile,
+                        'specstrat': 'Any' if specstrat is None else specstrat,
+                        'spec_texp': float( spechead['Texpose'] ),
+                        'specdt': float(spechead['MJD'] - rightz[dex]['SIM_PEAKMJD']),
+                        'specdtrest': float( ( spechead['MJD'] - rightz[dex]['SIM_PEAKMJD'] ) /
+                                             ( 1. + rightz[dex]['SIM_REDSHIFT_HELIO'] ) ),
+                        'specnbin_lam': float( spechead['NBIN_LAM'] ),
+                        'spechost_contam': float( spechead['SCALE_HOST_CONTAM'] ),
+                        'ptrspec_min': int( spechead['PTRSPEC_MIN'] ) - 1,
+                        'ptrspec_max': int( spechead['PTRSPEC_MAX'] ),
+                    } )
+
+            if found:
+                break
+
+        return retval
+
+
+
+# ======================================================================
+
+class RandomLTCV(BaseView, RandomObject):
+    def dispatch_request( self, collection, sim, gentype, z, dz, tier=None ):
         try:
             gentype = int(gentype)
             z = float(z)
             dz = float(dz)
 
-            # TODO : update this to when there is more than one collection sim dir
+            retval = self.find_random_object( collection, sim, gentype, z, dz, tier=tier )
+            if len( retval ) == 0:
+                raise RuntimeError( f"Failed to find an object of type {gentype} at z {z}±{dz}"
+                                    f"in {'any tier' if tier is None else f'tier {tier}'}" )
 
-            # HACK ALERT : update this when collection names are more coherent
+            retval['status'] = 'ok'
+            retval['ltcv'] = {}
+            retval['zp'] = 27.5       # Standard SNANA zeropoint
 
-            app.logger.debug( f"gentype={gentype}, z={z}, dz={dz}" )
-
-            simcomps = sim.strip().split()
-            app.logger.debug( f"collection={collection}, sim={sim}" )
-            app.logger.debug( f"collection={collection}, sim={sim}, simcomps[1]={simcomps[1]}" )
-            subdir = pathlib.Path( "/snana_sim" ) / f'ROMAN_{collection}_DATA-{simcomps[1]}'
-            g = [ i for i in subdir.glob( "*.README" ) ]
-            if len(g) == 0:
-                app.logger.error( f"Couldn't find a *.README file in {subdir}" )
-                raise RuntimeError( "Error parsing snana output data" )
-            if len(g) > 1:
-                app.logger.error( f"Found more than one *.README file in {subdir}" )
-                raise RuntimeError( "Error parsing snana output data" )
-
-            with open( g[0] ) as ifp:
-                blob = yaml.safe_load( ifp.read() )
-
-            model = None
-            for key in blob['DOCUMENTATION'].keys():
-                if key[0:11] == "INPUT_KEYS_":
-                    if blob['DOCUMENTATION'][key]['GENTYPE'] == gentype:
-                        model = key[11:]
-                        app.logger.debug( f"Found gentype {gentype} as model {model}" )
-
-            if model is None:
-                app.logger.error( f"Couldn't find model for gentype {gentype}" )
-                raise RuntimeError( "Couldn't find snana files for type" )
-
-            # TODO : assuming gzipped, fix that
-            g = [ i for i in subdir.glob( f"ROMAN_{model}-*_HEAD.FITS.gz" ) ]
-            random.shuffle( g )
-            app.logger.info( f"Looking in files {g}" )
-
-            found = False
-            for headfile in g:
-                with fits.open(headfile) as f:
-                    tab = f[1].data
-                    app.logger.debug( f"Read {headfile.name}, got {len(tab)} rows" )
-                    rightz = tab[ ( tab['SIM_REDSHIFT_CMB'] >= z - dz ) & ( tab['SIM_REDSHIFT_CMB'] <= z + dz ) ]
-                    app.logger.debug( f"Found {len(rightz)} at z={z}±{dz}" )
-                    if len(rightz) == 0:
-                        continue
-                    dex = random.randint( 0, len(rightz)-1 )
-
-                    if rightz[dex]['SIM_GENTYPE'] != gentype:
-                        app.logger.error( f"gentype mismatch error" )
-                        raise RuntimeError( "Gentype from HEAD file didn't match expected" )
-
-                    snid = rightz[dex]['SNID']
-                    ptrobs_min = rightz[dex]['PTROBS_MIN'] - 1
-                    ptrobs_max = rightz[dex]['PTROBS_MAX']
-                    snz = rightz[dex]['SIM_REDSHIFT_CMB']
-                    mwebv = rightz[dex]['SIM_MWEBV']
-                    av = rightz[dex]['SIM_AV']
-                    rv = rightz[dex]['SIM_RV']
-                    found = True
-
-                    photfile = headfile.parent / headfile.name.replace( '_HEAD.FITS.gz', '_PHOT.FITS.gz' )
-                    break
-
-            if not found:
-                app.logger.error( f"Failed to find an object of type {gentype} at z {z}±{dz}" )
-                raise RuntimeError( f"Failed to find an object of type {gentype} at z {z}±{dz}" )
-
-            retval = {
-                'status': 'ok',
-                'snid': int(snid),    # I hope python int can handle a 64-bit integer...
-                'zcmb': float(snz),
-                'mwebv': float(mwebv),
-                'av': float(av),
-                'rv': float(rv),
-                'zp': 27.5,      # Standard snana zeropoint
-                'ltcv': {}
-                }
-
-            app.logger.error( f"Opening photfile {photfile.name}" )
-            with fits.open( photfile ) as f:
-                photdata = f[1].data[ ptrobs_min : ptrobs_max ]
+            app.logger.error( f"Opening photfile {retval['photfile'].name}" )
+            with fits.open( retval['photfile'] ) as f:
+                photdata = f[1].data[ retval['ptrobs_min'] : retval['ptrobs_max'] ]
 
             app.logger.error( f"photdata columns: {photdata.columns}" )
 
@@ -643,6 +729,76 @@ class RandomLTCV(BaseView):
                 retval['ltcv'][band] = { 'mjd': [ float(i) for i in banddata['MJD'] ],
                                          'flux': [ float(i) for i in banddata['FLUXCAL'] ],
                                          'dflux': [ float(i) for i in banddata['FLUXCALERR'] ] }
+
+            # Clean up some fields from retval
+            fields = [ 'headfile', 'photfile', 'ptrobs_min', 'ptrobs_max' ]
+            for field in fields:
+                try:
+                    del retval[ field ]
+                except KeyError as ex:
+                    pass
+
+            return retval
+        except Exception as ex:
+            app.logger.exception( ex )
+            return { 'status': 'error', 'error': str(ex) }
+
+# ======================================================================
+
+class RandomSpectrum(BaseView, RandomObject):
+    def dispatch_request( self, collection, sim, gentype, z, dz, t, dt, argstr=None ):
+        data = { 'tframe': 'rest',
+                 'tier': None,
+                 'specstrat': None }
+        data.update( self.argstr_to_args( argstr ) )
+
+        try:
+            gentype = int(gentype)
+            z = float(z)
+            dz = float(dz)
+            t = float(t)
+            dt = float(dt)
+            isrest = False
+            if data['tframe'] == 'rest':
+                isrest = True
+            elif data['tframe'] != 'obs':
+                return f"Unknown tframe {data['tframe']}", 500
+
+            retval = self.find_random_object( collection, sim, gentype, z, dz,
+                                              tier=data['tier'], specstrat=data['specstrat'],
+                                              spect=t, specdt=dt, tframe=data['tframe'], need_spec=True )
+            if len( retval ) == 0:
+                tierstr = 'any tier' if data['tier'] is None else f'tier {data["tier"]}'
+                specstratstr = ( 'any spectrum strategy' if data['specstrat'] is None
+                                 else f'spectrum strategy {data["specstrat"]}' )
+                raise RuntimeError( f"Failed to find a spectrum of type {gentype} at z {z}±{dz} "
+                                    f"and t_{data['tframe']} {t}±{dt} "
+                                    f"for {tierstr} and {specstratstr}" )
+
+            retval['status'] = 'ok'
+
+            with fits.open( retval['specfile'], memmap=True ) as f:
+                rows = f[2].data[ retval['ptrspec_min'] : retval['ptrspec_max'] ]
+                retval['spectrum'] = {
+                    'lammin': [ float(i) for i in rows['LAMMIN'] ],
+                    'lammax': [ float(i) for i in rows['LAMMAX'] ],
+                    'flam': [ float(i) for i in rows['FLAM']*1e20 ],
+                    'flamerr': [ float(i) for i in rows['FLAMERR']*1e20 ],
+                    'sim_flam': [ float(i) for i in rows['SIM_FLAM']*1e20 ],
+                }
+                # app.logger.debug( f"rows['LAMMIN']={rows['LAMMIN']} ; lammin={retval['spectrum']['lammin']}" )
+
+            # Clean up some fields from retval
+            fields = [ 'headfile', 'photfile', 'ptrobs_min', 'ptrobs_max', 'specfile', 'ptrspec_min', 'ptrspec_max' ]
+            for field in fields:
+                # ****
+                if isinstance( retval[field], pathlib.Path ):
+                    retval[field] = str( retval[field] )
+                # ****
+            #     try:
+            #         del retval[ field ]
+            #     except KeyError as ex:
+            #         pass
 
             return retval
         except Exception as ex:
@@ -671,8 +827,14 @@ rules = {
     "/snzhist/<string:collection>/<string:sim>/<path:argstr>": SNZHist,
     "/spechist/<string:which>/<string:collection>/<string:sim>/<int:strategy>": SpecHist,
     "/spechist/<string:which>/<string:collection>/<string:sim>/<int:strategy>/<path:argstr>": SpecHist,
-    "/randomltcv/<string:collection>/<string:sim>/<int:gentype>/<float:z>/<float:dz>": RandomLTCV,
+    "/randomltcv/<string:collection>/<string:sim>/<int:gentype>/<string:z>/<string:dz>": RandomLTCV,
+    "/randomltcv/<string:collection>/<string:sim>/<int:gentype>/<string:z>/<string:dz>/<string:tier>": RandomLTCV,
+    ( "/randomspectrum/<string:collection>/<string:sim>/<int:gentype>/<string:z>/<string:dz>"
+      "/<string:t>/<string:dt>/<path:argstr>" ): RandomSpectrum,
 }
+
+# Dysfunctionality alert: flask routing doesn't interpret "0" or "5" as
+# a float.  (It thinks it's an int and an int only.)
 
 lastname = None
 for url, cls in rules.items():
@@ -685,3 +847,8 @@ for url, cls in rules.items():
         name += "x"
     lastname = name
     app.add_url_rule( url, view_func=cls.as_view(name), methods=["GET","POST"], strict_slashes=False )
+
+# ****
+# for rule in app.url_map.iter_rules():
+#     app.logger.debug( f"Found rule {rule}" )
+# ****
