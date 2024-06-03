@@ -20,7 +20,7 @@ Within this collection there are a total of 3×3×4=36 sims.  (The different spe
 
 ## snana-summary-webserver interactive website
 
-This lives at https://roman-snpit-snana-strategy.lbl.gov/
+This lives at `https://roman-snpit-snana-strategy.lbl.gov/`
 
 DOCUMENTATION TODO
 
@@ -28,7 +28,7 @@ DOCUMENTATION TODO
 
 ## snana-summary-webserver API
 
-The base URL for the API is the same as for the interactive webserver: https://roman-snpit-snana-strategy.lbl.gov/.  There are several API endpoints that return data in (usually) JSON format:
+The base URL for the API is the same as for the interactive webserver: `https://roman-snpit-snana-strategy.lbl.gov/`.  There are several API endpoints that return data in (usually) JSON format:
 
 ---
 
@@ -40,7 +40,7 @@ This API endpoint just returns a JSON string with list of the collections that a
 
 ### `/surveyinfo`
 
-Hit this API with the url `<baseurl>/surveyinfo/<string:collection>`, where the argument at the end is the collection you want to get information for.  (So, for example, you might hit the url `https://roman-snpit-snana-strategy.lbl.gov/surveyinfo/2TIER_PRISM25_5bands`.)
+Hit this API with the url `<baseurl>/surveyinfo/<string:collection>`, where the argument at the end is the collection you want to get information for.  So, for example, you might hit the url `https://roman-snpit-snana-strategy.lbl.gov/surveyinfo/2TIER_PRISM25_5bands`
 
 This API returns a JSON dictionary with the following keys.  Many of these are internal SNANA variables and are not useful outside of SNANA.
 
@@ -76,7 +76,7 @@ The columns, left to right, are: tier name, ra, dec, bands used for that tier, l
 
 ### `/instrinfo`
 
-API url: `<baseurl>/instrinfo/<string:collection>` (see `\surveyinfo` above).
+API url: `<baseurl>/instrinfo/<string:collection>` (see `/surveyinfo` above).
 
 Returns a JSON-encoded dictionary with bunch of information about the simulated instrument that SNANA used.
 
@@ -84,7 +84,7 @@ Returns a JSON-encoded dictionary with bunch of information about the simulated 
 
 ### `/analysisinfo`
 
-API url: `<baseurl>/analysisinfo/<string:collection>` (see `\surveyinfo` above).
+API url: `<baseurl>/analysisinfo/<string:collection>` (see `/surveyinfo` above).
 
 A JSON-encoded dictionary with a bunch of parameters that defined what SNANA did.  Probably of most interest is the sub-dictionary found underneath the `prescales` key of this dictionary.  The keys of that sub-dictionary are object types that were in the simulation (e.g. `Ia`, `AGN`, `IIL`, etc.).  The values are the scaling that should be applied to numbers of objects produced by the sim.  So, for example, if `analysisinfo['prescales']['IIP']` is equal to 10.0, that means that the sim only produced lightcurves for 1/10 as many SNIIP supernovae as it simulated would exist.  As such, any counts of IIP supernovae produced by further endpoints below should be multiplied by 10.
 
@@ -92,7 +92,7 @@ A JSON-encoded dictionary with a bunch of parameters that defined what SNANA did
 
 ### `/tiers`
 
-API url: `<baseurl>/tiers/<string:collection>` (see `\surveyinfo` above).
+API url: `<baseurl>/tiers/<string:collection>` (see `/surveyinfo` above).
 
 A JSON-encoded list with information about the tiers from this collection.  The length of the list is the number of tiers; each element of the list is a dictionary with keys:
 
@@ -128,7 +128,7 @@ Each sim is further divided into three spectrum strategies, with given exposure 
 
 ### `/surveys`
 
-API url: `<baseurl>/surveys/<string:collection>` (see `\surveyinfo` above).
+API url: `<baseurl>/surveys/<string:collection>` (see `/surveyinfo` above).
 
 Returns a JSON-encoded dictionary with a lot of information about each collection.  The key is the name of the sim (where the API url comes from "survey"="sim"), and the value is another dictionary with a lot of information.  The name of the sim should probably not be algorithmically parsed, but it's always '{collection} a{ai}_t{ti}_z{zi}' where `ai`, `ti`, and `zi` are indexes into the arrays defined in `/tiers` above.
 
@@ -224,7 +224,7 @@ This one is giant.
 
 ### `/summarydata`
 
-API url: `<baseurl>/surveys/<string:collection>` (see `\surveyinfo` above).
+API url: `<baseurl>/surveys/<string:collection>` (see `/surveyinfo` above).
 
 This is a way to get all of the information returned by API endpoints above in one go.  It returns a JSON-encoded dict with keys:
 
@@ -234,6 +234,7 @@ This is a way to get all of the information returned by API endpoints above in o
 * `tiers` : what you'd get from `/tiers/{collection}`
 * `surveys` : what you'd get from `/surveys/{collection}`
 
+---
 
 ### `/snzhist`
 
@@ -253,10 +254,13 @@ Two of these options require further explanation.
 
 `tier` can be either one of the names of the tiers (something like `SHALLOW` or `DEEP`), or it can be `__ALL__`, in which case multiple bars (for each tier) are plotted in each redshift bin.  (Again, play with the interactive webserver to see what this looks like.)
 
+---
 
 ### `/spechist`
 
 TODO
+
+---
 
 ### `/randomltcv`'
 
@@ -292,8 +296,9 @@ The returned value is a JSON-encoded dictionary:
 
 'zp' is the standard SNANA zeropoint, and is used to convert all fluxes to magnitudes.
 
-The 'ltcv' sub-dictionary has the lightcurves for each band.  (band will be something like 'J', 'H', etc.)  Hopefully the format is self-explanatroy.
+The 'ltcv' sub-dictionary has the lightcurves for each band.  (band will be something like 'J', 'H', etc.)  Hopefully the format is self-explanatory.
 
+---
 
 ### `/randomspectrum`
 
