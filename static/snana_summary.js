@@ -1256,11 +1256,6 @@ snanasum.SpecPlot = class extends snanasum.InfoWindow
                                                                      "attributes": { "value": specstrati } } );
         }
 
-        // ****
-        rkWebUtil.elemaker( "p", this.topdiv, { "text": "Note: asking for a specific spectrum strategy is currently broken.",
-                                                "classes": [ "italic" ] } );
-        // ****
-
         this.spec_plot_div = rkWebUtil.elemaker( "div", this.topdiv );
     }
 

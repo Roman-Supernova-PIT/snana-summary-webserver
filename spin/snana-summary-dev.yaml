@@ -64,12 +64,12 @@ spec:
         - name: registry-nersc
       volumes:
       - hostPath:
-          path: /global/cfs/cdirs/m4385/survey_strategy_optimization/snana_summary_webserver_data/temp
+          path: /global/cfs/cdirs/m4385/survey_strategy_optimization/snana_summary_webserver_data/2024-05-28_x536
           # path: /global/cfs/cdirs/m4385/survey_strategy_optimization/snana_summary_webserver_data/current
           type: Directory
         name: snana-summ-data
       - hostPath:
-          path: /global/cfs/cdirs/m4385/survey_strategy_optimization/snana_sims/2024-05-16_x536
+          path: /global/cfs/cdirs/m4385/survey_strategy_optimization/snana_sims/2024-05-28_x536
           # path: /global/cfs/cdirs/m4385/survey_strategy_optimization/snana_summary_webserver_data/snana_sim
           type: Directory
         name: snana-summ-snana-sim
