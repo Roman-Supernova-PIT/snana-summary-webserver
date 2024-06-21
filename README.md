@@ -26,6 +26,17 @@ DOCUMENTATION TODO
 
 ---
 
+## Underlying data
+
+This webap (and API) show summary data collected from the output of SNANA runs.  The SNANA output can be found in two directories:
+
+* [https://portal.nersc.gov/cfs/m4385/sims/RomanPIT-SNANA/](https://portal.nersc.gov/cfs/m4385/sims/RomanPIT-SNANA/) — SNANA output files with simulated photometric and spectroscopic data
+* [https://portal.nersc.gov/cfs/m4385/sims/RomanPIT_SNANA_pipeline_output/](https://portal.nersc.gov/cfs/m4385/sims/RomanPIT_SNANA_pipeline_output/) — SNANA collected summary and cosmology files.
+
+Each of those directories have multiple subdirectories.  One subdirectory holds a campaign; there are subdirectories for the collections within each campaign.  See the file `AAA_README.TXT` in the latter directory for a description of the campaigns.
+
+---
+
 ## snana-summary-webserver API
 
 The base URL for the API is the same as for the interactive webserver: `https://roman-snpit-snana-strategy.lbl.gov/`.  There are several API endpoints that return data in (usually) JSON format:

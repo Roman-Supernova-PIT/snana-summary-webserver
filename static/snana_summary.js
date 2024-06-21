@@ -18,6 +18,7 @@ snanasum.Context = class
     };
 
 
+    static filters = [ 'R', 'Z', 'Y', 'J', 'H', 'F', 'K' ]
     static filter_order = { 'R': 0,
                             'Z': 1,
                             'Y': 2,
@@ -656,21 +657,32 @@ snanasum.PhotSummary = class extends snanasum.InfoWindow
             td = rkWebUtil.elemaker( "td", trzsn, { "text": tierinfo.zSNRMATCH } );
             td = rkWebUtil.elemaker( "td", tropenfrac, { "text": tierinfo.OpenFrac } );
             td = rkWebUtil.elemaker( "td", trfilters );
-
-            let filters = [];
-            for ( let filt of Object.keys( tierinfo.bands ) ) {
-                if ( tierinfo.bands[filt] > 0 ) {
-                    filters.push( filt );
+            let subtable = rkWebUtil.elemaker( "table", td )
+            for ( let filt of snanasum.Context.filters ) {
+                tr = rkWebUtil.elemaker( "tr", subtable );
+                rkWebUtil.elemaker( "th", tr, { "text": filt } );
+                if ( tierinfo.bands.hasOwnProperty( filt ) && tierinfo.bands[filt] > 0 ) {
+                    rkWebUtil.elemaker( "td", tr, { "text": tierinfo.bands[filt] } );
+                }
+                else {
+                    rkWebUtil.elemaker( "td", tr, { "text": "—" } );
                 }
             }
-            filters.sort( snanasum.Context.filter_sort );
+            
+            // let filters = [];
+            // for ( let filt of Object.keys( tierinfo.bands ) ) {
+            //     if ( tierinfo.bands[filt] > 0 ) {
+            //         filters.push( filt );
+            //     }
+            // }
+            // filters.sort( snanasum.Context.filter_sort );
 
-            let firstfilt = true;
-            for ( let filt of filters ) {
-                if ( firstfilt ) firstfilt=false;
-                else rkWebUtil.elemaker( "br", td );
-                td.appendChild( document.createTextNode( filt + ": " + tierinfo.bands[filt] ) );
-            }
+            // let firstfilt = true;
+            // for ( let filt of filters ) {
+            //     if ( firstfilt ) firstfilt=false;
+            //     else rkWebUtil.elemaker( "br", td );
+            //     td.appendChild( document.createTextNode( filt + ": " + tierinfo.bands[filt] ) );
+            // }
         }
 
         p = rkWebUtil.elemaker( "p", this.infodiv,
