@@ -391,7 +391,7 @@ class SpecHist(BaseView):
                 if float( xticklabels[i] ) == gtonmaxxtick:
                     xticklabels[i] = f"≥{xticklabels[i]}"
             ax.set_xticklabels( xticklabels )
-x
+
         bio = io.BytesIO()
         fig.savefig( bio, format='svg' )
         pyplot.close( fig )
