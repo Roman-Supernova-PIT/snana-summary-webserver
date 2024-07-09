@@ -52,7 +52,7 @@ class RomanSurveySummary:
 
         The directory is expected to have a single file named INP* as a yaml file.
 
-        Returns surveyinfo, instroinfo, analysisinfo, tiers, filemap
+        Returns surveyinfo, instrinfo, analysisinfo, tiers, filemap
 
         surveyinfo is a dict with the CONFIG_SURVEY dictionary from the INP* file
            * FORCE_SNRMAX is converted from an array of strings (each

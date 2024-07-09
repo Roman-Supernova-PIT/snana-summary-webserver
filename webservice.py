@@ -356,7 +356,8 @@ class SpecHist(BaseView):
             return flask.abort( 500 )
 
 
-    def plothist( self, sim, dfs, minval, maxval, delta, binstr, gentypes, survey, data, extra_title="", x_title="" ):
+    def plothist( self, sim, dfs, minval, maxval, delta, binstr, gentypes, survey, data, extra_title="", x_title="",
+                  gtonmaxxtick=None ):
         nbars = len( data['tier'] ) * len( gentypes )
         dpi = 72
 
@@ -384,6 +385,13 @@ class SpecHist(BaseView):
         ax.set_title( f'{sim} ; FoM_stat = {survey["muopt"][0]["FoM_stat"]:.1f}\nband {data["band"]}{extra_title}',
                       fontsize=16 )
 
+        if gtonmaxxtick is not None:
+            xticklabels = [ item.get_text() for item in ax.get_xticklabels() ]
+            for i in range(len(xticklabels)):
+                if float( xticklabels[i] ) == gtonmaxxtick:
+                    xticklabels[i] = f"≥{xticklabels[i]}"
+            ax.set_xticklabels( xticklabels )
+x
         bio = io.BytesIO()
         fig.savefig( bio, format='svg' )
         pyplot.close( fig )
@@ -459,8 +467,9 @@ class SpecHist(BaseView):
         else:
             extra_title += f", all z"
 
-        return self.plothist( sim, dfs, snrmin, snrmax, dsnr, 'snrbin', gentypes, survey, data,
-                              extra_title=extra_title, x_title=f'S/N integrated over {data["band"]}-band' )
+        return self.plothist( sim, dfs, snrmin, snrmax+dsnr, dsnr, 'snrbin', gentypes, survey, data,
+                              extra_title=extra_title, x_title=f'S/N integrated over {data["band"]}-band',
+                              gtonmaxxtick=snrmax )
 
 
     def heatmap_restphase_z( self, sim, survey, spechists, gentypes, zmin, zmax, dz, tmin, tmax, dt, data, argstr ):
