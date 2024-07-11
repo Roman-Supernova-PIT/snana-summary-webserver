@@ -1,6 +1,7 @@
 import sys
 import os
 import io
+import copy
 import pathlib
 import re
 import gzip
@@ -35,11 +36,12 @@ class RomanSurveySummary:
     known_filters = ['R', 'Z', 'Y', 'J', 'H', 'F', 'K']
     surveynameparse = re.compile( '^(.*)\.SIMLIB(\.gz)?' )
 
-    def __init__( self, outdir, searchdir=None, snana_simdir=None, snrmaxcut=5. ):
+    def __init__( self, outdir, searchdir=None, snana_simdir=None, snrmaxcut1=10., snrmaxcut23=5. ):
         self.outdir = pathlib.Path( outdir )
         self.collections = {}
         self.snana_scratchdir = {}
-        self.snrmaxcut = snrmaxcut
+        self.snrmaxcut1 = snrmaxcut1
+        self.snrmaxcut23 = snrmaxcut23
         self.snana_simdir = None if snana_simdir is None else pathlib.Path( snana_simdir )
         self.searchdir = None if searchdir is None else pathlib.Path( searchdir )
 
@@ -155,9 +157,9 @@ class RomanSurveySummary:
         # Now I have two problems.
         parse_tier = re.compile( r'^\s*(?P<tier>[^/\s]+)(/\d+)?\s+(?P<ra>\d*\.?\d+)\s+(?P<dec>[\+\-]?\d*\.?\d+)\s+'
                                  r'(?P<bands>\S+)\s+\[\s*(?P<relarea>[^\]]+)\s*\]\s*'
-                                 r'\[\s*(?P<dt_visit>[^\]]+)\s*\]\s+\[\s*(?P<z_snrmatch>[^\]])+\s*\]' )
+                                 r'\[\s*(?P<dt_visit>[^\]]+)\s*\]\s+\[\s*(?P<z_snrmatch>[^\]]+)\s*\]' )
         tiers = []
-
+        
         texpose_prism = {}
         if 'TEXPOSE_PRISM' in surveyinfo.keys():
             for line in surveyinfo['TEXPOSE_PRISM']:
@@ -174,16 +176,24 @@ class RomanSurveySummary:
             if match is None:
                 raise ValueError( f"Failed to parse TIERS line \"{line}\"" )
             tiername = match.group('tier')
-            tiers.append( { 'name': tiername,
-                            'ra': float( match.group('ra') ),
-                            'dec': float( match.group('dec') ),
-                            'bands': [ i for i in match.group('bands') ],
-                            'relarea': [ int(i) for i in re.split( r'\s*,\s*', match.group('relarea') ) ],
-                            'dt_visit': [ float(i) for i in re.split( r'\s*,\s*', match.group('dt_visit') ) ],
-                            'z_snrmatch': [ float(i) for i in re.split( r'\s*,\s*', match.group('z_snrmatch') ) ],
-                            'texpose_prism': [] } )
-            if tiername in texpose_prism.keys():
-                tiers[-1]['texpose_prism'] = texpose_prism[tiername]
+            tiers.append( tiername )
+            # We're going to get all the information about each tier from
+            #  the SIMLIB file, not from here
+            # allbands = set( [ i for i in match.group('bands') if i != ',' ] )
+            # bands = [ i for i in RomanSurveySummary.known_filters if i in allbands ]
+            # if set( bands ) != allbands:
+            #     raise ValueError( f"Bands in INP file ({allbands}) include things I don't know "
+            #                       f"{RomanSurveySummary.known_filters}" )
+            # tiers.append( { 'name': tiername,
+            #                 'ra': float( match.group('ra') ),
+            #                 'dec': float( match.group('dec') ),
+            #                 'bands': bands,
+            #                 'relarea': [ int(i) for i in re.split( r'\s*,\s*', match.group('relarea') ) ],
+            #                 'dt_visit': [ float(i) for i in re.split( r'\s*,\s*', match.group('dt_visit') ) ],
+            #                 'z_snrmatch': [ float(i) for i in re.split( r'\s*,\s*', match.group('z_snrmatch') ) ],
+            #                 'texpose_prism': [] } )
+            # if tiername in texpose_prism.keys():
+            #     tiers[-1]['texpose_prism'] = texpose_prism[tiername]
 
         analysisinfo[ 'muopt' ] = [  { 'name': 'standard', 'idsurvey_select': -99 } ]
         muparse = re.compile( r'^\s*(?P<muname>.*)\s+idsurvey_select=(?P<surveyid>\d+)' )
@@ -237,42 +247,16 @@ class RomanSurveySummary:
             lines.append( line )
         ifp.close()
         simlib_doc_yaml = yaml.safe_load( '\n'.join( lines ) )['DOCUMENTATION']
+        
+        # Parse out the tier info; assume everything else
+        #   matches what we got from the INP file before
 
-        # Going to assume that things like FORCE_SNRMAX just match
-        # Parse out the tier info
-
-        for tieri, tierstr in enumerate( simlib_doc_yaml['TIER_INFO'] ):
-            ( name, bands, ntile, nvisit, area,
-              dt_visit, NLIBID, zSNRMATCH, OpenFrac ) = tierstr.split()
-            name = re.sub( "/.*$", "", name )
-            surveyinfo['tiers'][name] = {
-                'bands': { i:{} for i in bands },
-                'ntile': int( ntile ),
-                'nvisit': int( nvisit ),
-                'area': float( area ),
-                'dt_visit': float( dt_visit ),
-                'NLIBID': int( NLIBID ),
-                'zSNRMATCH': float( zSNRMATCH ),
-                'OpenFrac': float(OpenFrac) }
-            exptimes = simlib_doc_yaml['TIER_EXPOSURE_TIMES'][tieri].split()
-            exptimes[0] = re.sub( "/.*$", "", exptimes[0] )
-            if exptimes[0] != name:
-                raise ValueError( f"Tier mismatch in {simlib} at exposure times; found {exptimes[0]} "
-                                  f"where expected {name}" )
-            if exptimes[1] != bands:
-                raise ValueError( f"Tier exposure time mismatch for {simlib}, tier {name}: "
-                                  f"found {exptimes[1]} where expected {bands}" )
-            for band in bands:
-                if band not in RomanSurveySummary.known_filters:
-                    raise ValueError( f"Unknown band {band} in {simlib}, tier {name}" )
-
-            for band in RomanSurveySummary.known_filters:
-                if band in bands:
-                    bandi = bands.index( band )
-                    surveyinfo['tiers'][name]['bands'][band] = float( exptimes[bandi+2] )
-                else:
-                    surveyinfo['tiers'][name]['bands'][band] = 0.
-
+        for tieri, tierinfo in enumerate( simlib_doc_yaml[ 'TIER_INFO' ] ):
+            tierinfo = copy.copy( tierinfo )
+            tier = tierinfo['NAME']
+            del tierinfo['NAME']
+            surveyinfo['tiers'][tier] = tierinfo
+            
         return surveyinfo
 
     def _gen_zhists( self, dumpfilepath, gentypemap, prescales ):
@@ -297,7 +281,7 @@ class RomanSurveySummary:
         fields = dumpdf['FIELD'].unique()
         types = dumpdf['GENTYPE'].unique()
 
-        hist = { 'tier': [], 'gentype': [], 'zCMB': [], 'n': [] }
+        detectedzhist = { 'tier': [], 'gentype': [], 'zCMB': [], 'n': [] }
         snrmaxhist = { 'tier': [], 'gentype': [], 'zCMB': [], 'n': [] }
         snrmax2hist = { 'tier': [], 'gentype': [], 'zCMB': [], 'n': [] }
         snrmax3hist = { 'tier': [], 'gentype': [], 'zCMB': [], 'n': [] }
@@ -310,24 +294,29 @@ class RomanSurveySummary:
                     if gentypestr in prescales.keys():
                         prescale = float( prescales[gentypestr] )
                     gentypesne = sne_at_z[ sne_at_z['GENTYPE'] == gentype ]
-                    hist['tier'].append( field )
+                    detectedzhist['tier'].append( field )
                     snrmaxhist['tier'].append( field )
                     snrmax2hist['tier'].append( field )
                     snrmax3hist['tier'].append( field )
-                    hist['gentype'].append( gentype )
+                    detectedzhist['gentype'].append( gentype )
                     snrmaxhist['gentype'].append( gentype )
                     snrmax2hist['gentype'].append( gentype )
                     snrmax3hist['gentype'].append( gentype )
-                    hist['zCMB'].append( zlow )
+                    detectedzhist['zCMB'].append( zlow )
                     snrmaxhist['zCMB'].append( zlow )
                     snrmax2hist['zCMB'].append( zlow )
                     snrmax3hist['zCMB'].append( zlow )
-                    hist['n'].append( prescale * len(gentypesne) )
-                    snrmaxhist['n'].append( prescale * len( gentypesne[ gentypesne['SNRMAX'] > self.snrmaxcut ] ) )
-                    snrmax2hist['n'].append( prescale * len( gentypesne[ gentypesne['SNRMAX2'] > self.snrmaxcut ] ) )
-                    snrmax3hist['n'].append( prescale * len( gentypesne[ gentypesne['SNRMAX3'] > self.snrmaxcut ] ) )
+                    detectedzhist['n'].append( precsle * len( gentypesne ) )
+                    snrmaxhist['n'].append( prescale * len( gentypesne[ gentypesne['SNRMAX'] > self.snrmaxcut1 ] ) )
+                    snrmax2hist['n'].append( prescale * len( gentypesne[ ( gentypesne['SNRMAX1'] > self.snrmaxcut1 ) &
+                                                                         ( gentypesne['SNRMAX2'] > self.snrmaxcut23 )
+                                                                        ] ) )
+                    snrmax3hist['n'].append( prescale * len( gentypesne[ ( gentypesne['SNRMAX1'] > self.snrmaxcut1 ) &
+                                                                         ( gentypesne['SNRMAX2'] > self.snrmaxcut23 ) &
+                                                                         ( gentypesne['SNRMAX3'] > self.snrmaxcut23 )
+                                                                        ] ) )
 
-        return hist, snrmaxhist, snrmax2hist, snrmax3hist
+        return detectedzhist, snrmaxhist, snrmax2hist, snrmax3hist
 
     def _get_snana_scratchdir( self, collection ):
         # Find the SNANA output scratch directory
@@ -388,10 +377,10 @@ class RomanSurveySummary:
         # Build the histograms
 
         dumpfilepath = sndatadir / f'{survey_version}.DUMP'
-        ( zhist, snrmaxzhist,
+        ( detectedzhist, snrmaxzhist,
           snrmax2zhist, snrmax3zhist ) = self._gen_zhists( dumpfilepath, gentypemap, prescales )
 
-        return gentypemap, zhist, snrmaxzhist, snrmax2zhist, snrmax3zhist
+        return gentypemap, detectedzhist, snrmaxzhist, snrmax2zhist, snrmax3zhist
 
 
     def _read_spec( self, collection, survey_version, tiers ):
@@ -457,7 +446,7 @@ class RomanSurveySummary:
             specfile = sndatadir / f'{survey_version}.SPEC.gz'
             if not specfile.is_file():
                 _logger.error( f"Can't find {specfile} (w/ or w/o .gz), returning empty dict for spectrum info" )
-                return {}
+                return {}, {}
 
         _logger.debug( f"Parsing {specfile}" )
         # specdf = pandas.read_csv( specfile, delim_whitespace=True, comment='#', skip_blank_lines=True, compression='infer' )
@@ -627,40 +616,39 @@ class RomanSurveySummary:
            internal memeory; if we try to read a collection we've
            already read, raise an error unless this is True.
 
-        Will add to self.collections with key collection and value:
+        Will add to self.collections with key collection and value.
+        'surveyinfo', 'tiers', and 'instrinfo' are parsed fom the INP*
+        file.  'analysisinfo' is parsed from
+        ANALYSIS_INSTRUCTIONS.README.  The things under 'surveys' are
+        parsed from the *.SIMLIB files, except for the 'muopt' list
+        which comes from ...
+
            { 'surveyinfo': dict with keys OUTDIR, FORCE_TEXPOSE_LIST, FORCE_SIMGEN_INPUT_FILE,
                                           FORCE_NGEN, NLIBID_TOT, TIME_SUM_OBS, TEXPOSE_MIN,
                                           RANDOM_REJECT_OBS,
                                 'MJD_SEASON': [ { 'season_mjd0': mjd0, 'season_mjd1': mjd1 }, ... ],
                                 'FORCE_SNRMAX': [ { 'snr': snr, 'lam0': lam0, 'lam1': lam1 }, ... ]
                                 'FoM': [ { 'muopt_dex': int, 'muopt': str, 'FoM_stat': float }, ... ]
-             'tiers': [ { 'name': tier name,
-                             'ra': ra,
-                             'dec': dec,
-                             'bands': list of letters,
-                             'relarea': list of of ints,
-                             'dt_visit': list of floats,
-                             'z_snrmatch': list of floats,
-                             'texpose_prism': list of ints
-                          } ]
+             'tiers': list of tier names,
              'instrinfo': dict of stuff,
              'analysisinfo': dict with a bunch of keys including
                            'muopt': [ { 'name': str, 'idsurvey_select': int } ]
-             'surveys': { name : { 'tiers': { tier: { (several other keys),
-                                                      'bands': { letter: exptime, ... },
-                                                      'ntile': int,
-                                                      'nvisit': int,
-                                                      'area': float,
-                                                      'dt_visit': float,
+             'surveys': { name : { 'tiers': { tier: { 'BANDS': { band: t_expose, band: t_expose, ... },
+                                                      'BANDS_BY_FISIT: list [SEE BELOW],
+                                                      'T_EXPOSE': list [SEE BELOW],
+                                                      'NTILE': int,
+                                                      'NVISIT': int,
+                                                      'AREA': float,  (square degrees)
+                                                      'DT_VISIT': float,   (days),
                                                       'NLIBID': int,
                                                       'zSNRMATCH': float,
-                                                      'OpenFrac': float,
+                                                      'OPEN_SHUTTER_FRAC': float,
                                                     }
                                             }
-                                   'zhist': { 'tier': [...], 'gentype': [...], 'zCMB': [...], 'n': [...] },
-                                   'snrmaxzhist': { <same structure as zhist> },
-                                   'snrmaxz2hist': { <same structure as zhist> },
-                                   'snrmaxz3hist': { <same structure as zhist> },
+                                   'detectedzhist': { 'tier': [...], 'gentype': [...], 'zCMB': [...], 'n': [...] },
+                                   'snrmaxzhist': { <same structure as detectedzhist> },
+                                   'snrmaxz2hist': { <same structure as detectedzhist> },
+                                   'snrmaxz3hist': { <same structure as detectedzhist> },
                                    'spechists': { <see _read_spec> },
                                    'gentypemap' : { gentype: name, ... },
                                    'long_survey_version' : <str>,
@@ -726,11 +714,11 @@ class RomanSurveySummary:
 
                     try:
                         surveys[short_survey_version] = self._read_simlib_doc( simlib_file, tiers )
-                        ( gentypemap, zhist, snrmaxzhist,
+                        ( gentypemap, detectedzhist, snrmaxzhist,
                           snrmax2zhist, snrmax3zhist ) = self._read_dump( collection, survey_version,
                                                                           analysisinfo['prescales'] )
                         surveys[short_survey_version]['gentypemap'] = gentypemap
-                        surveys[short_survey_version]['zhist'] = zhist
+                        surveys[short_survey_version]['detectedzhist'] = detectedzhist
                         surveys[short_survey_version]['snrmaxzhist'] = snrmaxzhist
                         surveys[short_survey_version]['snrmax2zhist'] = snrmax2zhist
                         surveys[short_survey_version]['snrmax3zhist'] = snrmax3zhist
@@ -795,7 +783,7 @@ class RomanSurveySummary:
                 with open( self.outdir / f'{collection}_{attr}.json', 'w' ) as ofp:
                     json.dump( self.collections[collection][attr], ofp, cls=NumpyEncoder )
 
-    def process_searchdir( self ):
+    def process_searchdir( self, regen=False, savecache=True, clobber=False ):
         if self.searchdir is None:
             raise ValueError( "Can't process_searchdir : no searchdir was given to RomanSurveySummary constructor." )
 
@@ -809,7 +797,7 @@ class RomanSurveySummary:
             surveyname = match.group(1)
 
             _logger.info( f"Working on collection {surveyname}" )
-            self.read_files( surveyname, direc )
+            self.read_files( surveyname, direc, regen=regen, savecache=savecache, clobber=False )
 
         _logger.info( f"All done with collecitons in {self.searchdir}" )
 
@@ -831,13 +819,20 @@ def main():
                                 "campaign in --campaign-pipeline-dir.  In this directory are "
                                 "subdirectories corresponding to all of the versions found in all of the"
                                 ".../OUTPUT2*/MERGE.LOG files under campaign-pipeline-dir." ) )
+    parser.add_argument( "-c", "--clobber", action='store_true', default=False,
+                         help="Overwriting existing cache files" )
+    parser.add_argument( "-r", "--regen", action='store_true', default=False,
+                         help="Always regen; if not given, then will read cache files from a previous run" )
+    parser.add_argument( "--no-save", action='store_true', default=False,
+                         help="Don't actually save anything.  This is useless." )
+    
     args = parser.parse_args()
 
     if args.verbose:
         _logger.setLevel( logging.DEBUG )
 
     ss = RomanSurveySummary( args.outdir, searchdir=args.campaign_pipeline_dir, snana_simdir=args.snana_simdir )
-    ss.process_searchdir()
+    ss.process_searchdir( clobber=args.clobber, regen=args.regen, savecache=not args.no_save )
 
     # for snanadir in args.snana_outdirs:
     #     inpfile = pathlib.Path( snanadir )

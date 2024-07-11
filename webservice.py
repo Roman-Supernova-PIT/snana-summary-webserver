@@ -48,16 +48,20 @@ class BaseView(flask.views.View):
             kwargs.update( flask.request.json )
         return kwargs
 
-    def readjson( self, collection, which ):
-        f = pathlib.Path( f"/data/{collection}_{which}.json" )
+    def readjson( self, campaign, collection, which ):
+        app.logger.info( f"Loading campaign={campaign}, collection={collection}, which={which}" )
+        f = pathlib.Path( f"/data/{campaign}/{collection}_{which}.json" )
         if not f.is_file():
-            raise Exception( f'No {which} file for {collection}' )
+            strio = io.StringIO()
+            traceback.print_exc( file=strio )
+            app.logger.error( strio.getvalue() )
+            raise Exception( f'No {which} file for {campaign}/{collection}' )
         with open( f ) as ifp:
             jsontext = ifp.read()
         return jsontext
 
-    def returnjson( self, collection, which ):
-        jsontext = self.readjson( collection, which )
+    def returnjson( self, campaign, collection, which ):
+        jsontext = self.readjson( campaign, collection, which )
         response = flask.make_response( jsontext )
         response.headers['Content-Type'] = 'application/json'
         return response
@@ -69,51 +73,67 @@ class MainPage(BaseView):
         return flask.render_template( 'snana-summary-root.html' )
 
 # ======================================================================
+# TODO : make this not hardcoded
+
+class Campaigns(BaseView):
+    def dispatch_request( self ):
+        return { 'status': 'ok',
+                 'campaigns':
+                 { '2024-06-25_x536': '(todo)',
+                   '2024-07-09_x54_3SNrates': '(todo)'
+                  }
+                }
+
+# ======================================================================
 
 class Collections(BaseView):
-    def dispatch_request( self ):
-        d = pathlib.Path( "/data" )
+    def dispatch_request( self, campaign ):
+        app.logger.info( f"Looking in /data/{campaign} for *surveys.json" )
+        d = pathlib.Path( f"/data/{campaign}" )
         jsonlist = list( d.glob( '*surveys.json' ) )
         jsonlist = [ str(i.name).replace( '_surveys.json', '' ) for i in jsonlist ]
         jsonlist.sort()
         return { 'status': 'ok',
+                 'campaign': campaign,
                  'collections': jsonlist }
+
 # ======================================================================
 
 class SurveyInfo(BaseView):
-    def dispatch_request( self, collection ):
-        return self.returnjson( collection, 'surveyinfo' )
+    def dispatch_request( self, campaign, collection ):
+        return self.returnjson( campaign, collection, 'surveyinfo' )
 
 class InstrInfo(BaseView):
-    def dispatch_request( self, collection ):
-        return self.returnjson( collection, 'instrinfo' )
+    def dispatch_request( self, campaign, collection ):
+        return self.returnjson( campaign, collection, 'instrinfo' )
 
 class AnalysisInfo(BaseView):
-    def dispatch_request( self, collection ):
-        return self.returnjson( collection, 'analysisinfo' )
+    def dispatch_request( self, campaign, collection ):
+        return self.returnjson( campaign, collection, 'analysisinfo' )
 
 class Tiers(BaseView):
-    def dispatch_request( self, collection ):
-        return self.returnjson( colletion, 'tiers' )
+    def dispatch_request( self, campaign, collection ):
+        return self.returnjson( campaign, collection, 'tiers' )
 
 class Surveys(BaseView):
-    def dispatch_request( self, collection ):
-        return self.returnjson( collection, 'surveys' )
+    def dispatch_request( self, campaign, collection ):
+        return self.returnjson( campaign, collection, 'surveys' )
 
 # ======================================================================
 
 class SummaryData(BaseView):
-    def dispatch_request( self, collection ):
+    def dispatch_request( self, campaign, collection ):
         try:
-            si = self.readjson( collection, 'surveyinfo' )
-            ii = self.readjson( collection, 'instrinfo' )
-            ai = self.readjson( collection, 'analysisinfo' )
-            t = self.readjson( collection, 'tiers' )
-            s = self.readjson( collection, 'surveys' )
+            si = self.readjson( campaign, collection, 'surveyinfo' )
+            ii = self.readjson( campaign, collection, 'instrinfo' )
+            ai = self.readjson( campaign, collection, 'analysisinfo' )
+            t = self.readjson( campaign, collection, 'tiers' )
+            s = self.readjson( campaign, collection, 'surveys' )
         except Exception as e:
             return str(e), 500
 
-        response = flask.make_response( f'{{"status": "ok", "surveyinfo": {si}, "instrinfo": {ii}, '
+        response = flask.make_response( f'{{"status": "ok", "campaign": "{campaign}", "collection": "{collection}", '
+                                        f'"surveyinfo": {si}, "instrinfo": {ii}, '
                                         f'"analysisinfo": {ai}, "tiers": {t}, "surveys": {s} }}' )
         response.headers['Content-Type'] = 'application/json'
         return response
@@ -121,17 +141,17 @@ class SummaryData(BaseView):
 # ======================================================================
 
 class SNZHist(BaseView):
-    def dispatch_request( self, collection, sim, argstr=None ):
+    def dispatch_request( self, campaign, collection, sim, argstr=None ):
         try:
             data = { 'width': 600,
                      'height': 500,
-                     'whichhist': 'zhist',
+                     'whichhist': 'snrmaxzhist',
                      'gentype': 10,
                      'tier': "__ALL__"
                      }
             data.update( self.argstr_to_args( argstr ) )
 
-            surveys = json.loads( self.readjson( collection, 'surveys' ) )
+            surveys = json.loads( self.readjson( campaign, collection, 'surveys' ) )
             if sim not in surveys.keys():
                 app.logger.error( f"error, could not find survey {sim} in collection {collection}\n" )
                 return f'error, could not find survey {sim} in collection {collection}', 500
@@ -157,18 +177,25 @@ class SNZHist(BaseView):
                 gentypes = [ gentype ]
 
             histdata = None
-            if data['whichhist'] == 'zhist':
-                histdata = survey['zhist']
+            cutdesc = 'Unknown cut'
+            if data['whichhist'] == 'Iacosmocutzhist':
+                if gentype != 10:
+                    return f"Can't show a histogram of non-Ia SNe using the SNIa cosmology cut", 500
+                cutdesc = 'Includes SNe that passed the cut used for SNIa Cosmology'
+                return f'Histogram of SNe used in the Ia Cosmology not implemented', 500
             elif data['whichhist'] == 'snrmaxzhist':
+                cutdesc = 'S/N max ≥ 10'
                 histdata = survey['snrmaxzhist']
             elif data['whichhist'] == 'snrmax2zhist':
+                cutdesc = 'S/N max ≥ 10, 2nd band S/N max ≥ 5'
                 histdata = survey['snrmax2zhist']
             elif data['whichhist'] == 'snrmax3zhist':
+                cutdesc = 'S/N max ≥ 10, 2nd & 3rd band S/N max ≥ 5'
                 histdata = survey['snrmax3zhist']
             else:
-                app.logger.error( f'Unknown snrmax {whichhist}, must be one of '
-                                  f'(zhist,snrmaxzhist,snrmax2zhist,snrmax3zhist)\n' )
-                return f'Unknown snrmax {snrmax}', 500
+                app.logger.error( f'Unknown cut {data["whichhist"]}, must be one of '
+                                  f'(Iacosmocutzhist,snrmaxzhist,snrmax2zhist,snrmax3zhist)\n' )
+                return f'Unknown snrmax {data["whichhist"]}', 500
 
             tiers = []
             if data['tier'] == '__ALL__':
@@ -220,7 +247,8 @@ class SNZHist(BaseView):
             ax.tick_params( "both", labelsize=12 )
             ax.set_xlabel( r'z_CMB', fontsize=16 )
             ax.set_ylabel( r'n Roman-discovered objects', fontsize=16 )
-            ax.set_title( f'{sim} ; FoM_stat = {surveys[sim]["muopt"][0]["FoM_stat"]:.1f}', fontsize=16 )
+            ax.set_title( f'{sim} ; FoM_stat = {surveys[sim]["muopt"][0]["FoM_stat"]:.1f}\n{cutdesc}',
+                          fontsize=16 )
 
             bio = io.BytesIO()
             fig.savefig( bio, format='svg' )
@@ -238,7 +266,7 @@ class SNZHist(BaseView):
 # ======================================================================
 
 class SpecHist(BaseView):
-    def dispatch_request( self, which, collection, sim, strategy, argstr=None ):
+    def dispatch_request( self, which, campaign, collection, sim, strategy, argstr=None ):
         try:
             data = { 'width': 600,
                      'height': 500,
@@ -263,7 +291,7 @@ class SpecHist(BaseView):
             else:
                 return f'tframe must be rest or obs', 500
 
-            surveys = json.loads( self.readjson( collection, 'surveys' ) )
+            surveys = json.loads( self.readjson( campaign, collection, 'surveys' ) )
             if sim not in surveys.keys():
                 sys.stderr.write( f"error, could not find survey {sim} in collection {collection}\n" )
                 return f"error, could not find survey {sim} in collection {collection}", 500
@@ -278,6 +306,7 @@ class SpecHist(BaseView):
             if ( strategy < 0 ) or ( strategy >= spechists['nspecstrategies'] ):
                 return f"There are {spechists['nspecstrategies']} spectrum stragies; {strategy} is out of range", 500
 
+            app.logger.debug( f"data['tbin']={data['tbin']}" )
             if data['tbin'] is None:
                 data['tbin'] = int( -spechists['tobsmin'] / spechists['deltat'] + 0.5 )
             if data['snrbin'] is None:
@@ -286,6 +315,7 @@ class SpecHist(BaseView):
                 data['zbin'] = 5
             if data['magbin'] is None:
                 data['magbin'] = 5
+            app.logger.debug( f"data['tbin']={data['tbin']}" )
 
             data['tbin'] = int( data['tbin'] )
             data['t'] = spechists['tobsmin'] + data['tbin'] * spechists['deltat']
@@ -549,7 +579,8 @@ class SpecHist(BaseView):
 # ======================================================================
 
 class RandomObject:
-    def find_random_object( self, collection, sim, gentype, z, dz, tier=None, specstrat=None, spect=0., specdt=1.,
+    def find_random_object( self, campaign, collection, sim, gentype, z, dz,
+                            tier=None, specstrat=None, spect=0., specdt=1.,
                             tframe='rest', need_spec=False ):
         retval = {}
 
@@ -565,9 +596,9 @@ class RandomObject:
         # app.logger.debug( f"gentype={gentype}, z={z}, dz={dz}" )
 
         simcomps = sim.strip().split()
-        app.logger.debug( f"collection={collection}, sim={sim}" )
-        app.logger.debug( f"collection={collection}, sim={sim}, simcomps[1]={simcomps[1]}" )
-        subdir = pathlib.Path( "/snana_sim" ) / f'ROMAN_{collection}_DATA-{simcomps[1]}'
+        #app.logger.debug( f"campaign={campaign}, collection={collection}, sim={sim}" )
+        app.logger.debug( f"campaign={campaign} collection={collection}, sim={sim}, simcomps[1]={simcomps[1]}" )
+        subdir = pathlib.Path( "/snana_sim" ) / campaign / f'ROMAN_{collection}_DATA-{simcomps[1]}'
         g = [ i for i in subdir.glob( "*.README" ) ]
         if len(g) == 0:
             app.logger.error( f"Couldn't find a *.README file in {subdir}" )
@@ -601,7 +632,7 @@ class RandomObject:
         # If need_spec is True then we need to read the cache of spectrum CIDs
         if need_spec:
             app.logger.debug( f"sim={sim}" )
-            spectiercids = json.loads( self.readjson( collection, 'spectiercids' ) )
+            spectiercids = json.loads( self.readjson( campaign, collection, 'spectiercids' ) )
             spectiercids = spectiercids[ sim ]
 
         # TODO : assuming gzipped, fix that
@@ -712,13 +743,13 @@ class RandomObject:
 # ======================================================================
 
 class RandomLTCV(BaseView, RandomObject):
-    def dispatch_request( self, collection, sim, gentype, z, dz, tier=None ):
+    def dispatch_request( self, campaign, collection, sim, gentype, z, dz, tier=None ):
         try:
             gentype = int(gentype)
             z = float(z)
             dz = float(dz)
 
-            retval = self.find_random_object( collection, sim, gentype, z, dz, tier=tier )
+            retval = self.find_random_object( campaign, collection, sim, gentype, z, dz, tier=tier )
             if len( retval ) == 0:
                 raise RuntimeError( f"Failed to find an object of type {gentype} at z {z}±{dz}"
                                     f"in {'any tier' if tier is None else f'tier {tier}'}" )
@@ -755,7 +786,7 @@ class RandomLTCV(BaseView, RandomObject):
 # ======================================================================
 
 class RandomSpectrum(BaseView, RandomObject):
-    def dispatch_request( self, collection, sim, gentype, z, dz, t, dt, argstr=None ):
+    def dispatch_request( self, campaign, collection, sim, gentype, z, dz, t, dt, argstr=None ):
         data = { 'tframe': 'rest',
                  'tier': None,
                  'specstrat': None }
@@ -773,7 +804,7 @@ class RandomSpectrum(BaseView, RandomObject):
             elif data['tframe'] != 'obs':
                 return f"Unknown tframe {data['tframe']}", 500
 
-            retval = self.find_random_object( collection, sim, gentype, z, dz,
+            retval = self.find_random_object( campaign, collection, sim, gentype, z, dz,
                                               tier=data['tier'], specstrat=data['specstrat'],
                                               spect=t, specdt=dt, tframe=data['tframe'], need_spec=True )
             if len( retval ) == 0:
@@ -825,20 +856,23 @@ app.add_url_rule( "/",
                   strict_slashes=False )
 
 rules = {
-    "/collections": Collections,
-    "/surveyinfo/<string:collection>": SurveyInfo,
-    "/instrinfo/<string:collection>": InstrInfo,
-    "/analysisinfo/<string:collection>": AnalysisInfo,
-    "/tiers/<string:collection>": Tiers,
-    "/surveys/<string:collection>": Surveys,
-    "/summarydata/<string:collection>": SummaryData,
-    "/snzhist/<string:collection>/<string:sim>": SNZHist,
-    "/snzhist/<string:collection>/<string:sim>/<path:argstr>": SNZHist,
-    "/spechist/<string:which>/<string:collection>/<string:sim>/<int:strategy>": SpecHist,
-    "/spechist/<string:which>/<string:collection>/<string:sim>/<int:strategy>/<path:argstr>": SpecHist,
-    "/randomltcv/<string:collection>/<string:sim>/<int:gentype>/<string:z>/<string:dz>": RandomLTCV,
-    "/randomltcv/<string:collection>/<string:sim>/<int:gentype>/<string:z>/<string:dz>/<string:tier>": RandomLTCV,
-    ( "/randomspectrum/<string:collection>/<string:sim>/<int:gentype>/<string:z>/<string:dz>"
+    "/campaigns": Campaigns,
+    "/collections/<string:campaign>": Collections,
+    "/surveyinfo/<string:campaign>/<string:collection>": SurveyInfo,
+    "/instrinfo/<string:campaign>/<string:collection>": InstrInfo,
+    "/analysisinfo/<string:campaign>/<string:collection>": AnalysisInfo,
+    "/tiers/<string:campaign>/<string:collection>": Tiers,
+    "/surveys/<string:campaign>/<string:collection>": Surveys,
+    "/summarydata/<string:campaign>/<string:collection>": SummaryData,
+    "/snzhist/<string:campaign>/<string:collection>/<string:sim>": SNZHist,
+    "/snzhist/<string:campaign>/<string:collection>/<string:sim>/<path:argstr>": SNZHist,
+    "/spechist/<string:which>/<string:campaign>/<string:collection>/<string:sim>/<int:strategy>": SpecHist,
+    ( "/spechist/<string:which>/<string:campaign>/<string:collection>/<string:sim>"
+      "/<int:strategy>/<path:argstr>" ): SpecHist,
+    "/randomltcv/<string:campaign>/<string:collection>/<string:sim>/<int:gentype>/<string:z>/<string:dz>": RandomLTCV,
+    ( "/randomltcv/<string:campaign>/<string:collection>/<string:sim>"
+      "/<int:gentype>/<string:z>/<string:dz>/<string:tier>" ): RandomLTCV,
+    ( "/randomspectrum/<string:campaign>/<string:collection>/<string:sim>/<int:gentype>/<string:z>/<string:dz>"
       "/<string:t>/<string:dt>/<path:argstr>" ): RandomSpectrum,
 }
 

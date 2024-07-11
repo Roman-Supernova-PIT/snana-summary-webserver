@@ -50,6 +50,9 @@ spec:
         - mountPath: /snana_sim
           name: snana-summ-snana-sim
           readOnly: true
+        - mountPath: /snana_sim_base
+          name: snana-summ-snana-sim-base
+          readOnly: true
         # Comment this out to use the code baked into the Dockerfile
         - mountPath: /code
           name: snana-summ-code
@@ -64,15 +67,17 @@ spec:
         - name: registry-nersc
       volumes:
       - hostPath:
-          path: /global/cfs/cdirs/m4385/survey_strategy_optimization/snana_summary_webserver_data/2024-05-28_x536
-          # path: /global/cfs/cdirs/m4385/survey_strategy_optimization/snana_summary_webserver_data/current
+          path: /global/cfs/cdirs/m4385/survey_strategy_optimization/snana_summary_webserver_data
           type: Directory
         name: snana-summ-data
       - hostPath:
-          path: /global/cfs/cdirs/m4385/survey_strategy_optimization/snana_sims/2024-05-28_x536
-          # path: /global/cfs/cdirs/m4385/survey_strategy_optimization/snana_summary_webserver_data/snana_sim
+          path: /global/cfs/cdirs/m4385/www/sims/RomanPIT-SNANA
           type: Directory
         name: snana-summ-snana-sim
+      - hostPath:
+          path: /global/cfs/cdirs/m4385/www/sims/
+          type: Directory
+        name: snana-summ-snana-sim-base
       - hostPath:
           path: /global/cfs/cdirs/m4385/survey_strategy_optimization/code/snana-summary-dev-webserver
           type: Directory

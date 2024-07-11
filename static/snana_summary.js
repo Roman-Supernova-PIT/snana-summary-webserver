@@ -13,8 +13,8 @@ snanasum.Context = class
 {
     constructor()
     {
-        this.collections = null;
-        this.collectiondivs = {};
+        this.campaigns = null;
+        this.campaigndivs = {};
     };
 
 
@@ -50,9 +50,9 @@ snanasum.Context = class
     {
         var self = this;
 
-        if ( this.collections == null ) {
-            let connector = new rkWebUtil.Connector( "/collections" );
-            connector.sendHttpRequest( "", {}, function( r ) { self.parse_collections_and_render( r ); } );
+        if ( this.campaigns == null ) {
+            let connector = new rkWebUtil.Connector( "/campaigns" );
+            connector.sendHttpRequest( "", {}, function( r ) { self.parse_campaigns_and_render( r ); } );
         }
         else {
             this.actually_renderpage();
@@ -60,7 +60,7 @@ snanasum.Context = class
     }
 
 
-    parse_collections_and_render( data )
+    parse_campaigns_and_render( data )
     {
         this.maindiv = document.getElementById( "pagebody" );
         rkWebUtil.wipeDiv( this.maindiv );
@@ -71,7 +71,7 @@ snanasum.Context = class
             return;
         }
 
-        this.collections = data['collections'];
+        this.campaigns = data['campaigns'];
         this.actually_renderpage();
     }
 
@@ -84,6 +84,87 @@ snanasum.Context = class
         rkWebUtil.elemaker( "h4", this.maindiv,
                             { "text": "WARNING: results are very preliminary and subject to massive change" } );
 
+        h3 = rkWebUtil.elemaker( "h3", this.maindiv, { "text": "Show simulation campaign: " } );
+        this.campaignwidget = rkWebUtil.elemaker( "select", h3 );
+        let col = null;
+        for ( let campaign in this.campaigns ) {
+            let option = rkWebUtil.elemaker( "option", this.campaignwidget,
+                                             { "text": campaign,
+                                               "attributes": { "value": campaign } } );
+            if ( col == null ) {
+                option.setAttribute( "selected", "selected" );
+                col = campaign;
+            }
+        }
+
+        rkWebUtil.elemaker( "hr", this.maindiv );
+        this.campaigndiv = rkWebUtil.elemaker( "div", this.maindiv );
+
+        this.campaignwidget.addEventListener( "change", function() {
+            let col = self.campaignwidget.value;
+            if ( ! self.campaigndivs.hasOwnProperty( col ) ) {
+                self.campaigndivs[col] = new snanasum.Campaign( col, self.campaigndiv );
+            }
+            self.campaigndivs[col].renderpage();
+        } );
+
+        this.campaigndivs[col] = new snanasum.Campaign( col, this.campaigndiv );
+        this.campaigndivs[col].renderpage();
+    }
+}
+
+// **********************************************************************
+// **********************************************************************
+// **********************************************************************
+
+snanasum.Campaign = class {
+    constructor( campaign, maindiv )
+    {
+        this.maindiv = maindiv;
+        this.campaign = campaign;
+        this.collectionlist = null;
+        this.collectiondivs = {};
+        this.shown_collection = null;
+    }
+
+    renderpage()
+    {
+        var self = this;
+        rkWebUtil.wipeDiv( this.maindiv );
+        rkWebUtil.elemaker( "h3", this.maindiv,
+                            { "text": "Loading...",
+                              "classes": [ "italic", "bold", "warning" ] } );
+        if ( this.collectionlist == null ) {
+            let connector = new rkWebUtil.Connector( "/collections/" + this.campaign );
+            connector.sendHttpRequest( "", {}, (r) => { self.parse_collections_and_render( r ); } );
+        }
+        else {
+            this.actually_renderpage();
+        }
+    }
+    
+    parse_collections_and_render( data )
+    {
+        rkWebUtil.wipeDiv( this.maindiv );
+
+        if ( data.hasOwnProperty( 'error' ) ) {
+            rkWebUtil.elemaker( "h2", this.maindiv, { "text": "Error from server" } );
+            rkWebUtil.elemaker( "p", this.maindiv, { 'text': data['error'] } );
+            return;
+        }
+
+        this.collections = data['collections'];
+        this.actually_renderpage( data );
+    }
+
+
+    actually_renderpage( data )
+    {
+        var self = this
+        var h2, h3;
+
+        h2 = rkWebUtil.elemaker( "h2", this.maindiv, { "text": "Collections for campaign " + this.campaign } );
+        
         h3 = rkWebUtil.elemaker( "h3", this.maindiv, { "text": "Show simulation collection: " } );
         this.collectionwidget = rkWebUtil.elemaker( "select", h3 );
         let col = null;
@@ -103,12 +184,12 @@ snanasum.Context = class
         this.collectionwidget.addEventListener( "change", function() {
             let col = self.collectionwidget.value;
             if ( ! self.collectiondivs.hasOwnProperty( col ) ) {
-                self.collectiondivs[col] = new snanasum.Collection( col, self.collectiondiv );
+                self.collectiondivs[col] = new snanasum.Collection( self, col, self.collectiondiv );
             }
             self.collectiondivs[col].renderpage();
         } );
 
-        this.collectiondivs[col] = new snanasum.Collection( col, this.collectiondiv );
+        this.collectiondivs[col] = new snanasum.Collection( this, col, this.collectiondiv );
         this.collectiondivs[col].renderpage();
     }
 }
@@ -118,8 +199,9 @@ snanasum.Context = class
 // **********************************************************************
 
 snanasum.Collection = class {
-    constructor( collection, maindiv )
+    constructor( campaign, collection, maindiv )
     {
+        this.campaign = campaign;
         this.maindiv = maindiv;
         this.collection = collection;
         this.surveylist = null;
@@ -139,7 +221,7 @@ snanasum.Collection = class {
                               "classes": [ "italic", "bold", "warning" ] } );
         if ( this.surveylist == null ) {
             let connector = new rkWebUtil.Connector( "/summarydata" );
-            connector.sendHttpRequest( "/"+this.collection, {},
+            connector.sendHttpRequest( "/"+this.campaign.campaign + "/" + this.collection, {},
                                        function( resp ) { self.parse_summary_info_and_render( resp ); } );
         }
         else {
@@ -402,12 +484,12 @@ snanasum.Collection = class {
                 let cls = (whichcolor == 1) ? "lotsfaded" : "mostfaded";
                 tr.classList.add( cls );
                 td = rkWebUtil.elemaker( "td", tr, { "text": tier } );
-                td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].zSNRMATCH } );
+                td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].zSNRMATCH.toFixed( 1 ) } );
                 this.simtable_hidecolumns.push( td );
 
                 td = rkWebUtil.elemaker( "td", tr, { "text": this.get_filter_str( sim, tier ) } );
                 this.simtable_hidecolumns.push( td );
-                td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].area } );
+                td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].area.toFixed( 2 ) } );
                 this.simtable_hidecolumns.push( td );
                 td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].ntile } );
                 this.simtable_hidecolumns.push( td );
@@ -551,15 +633,15 @@ snanasum.PhotSummary = class extends snanasum.InfoWindow
                                                   { "change": ( function() {
                                                       self.show_sim( self.shown_sim );
                                                   } ) } );
-        rkWebUtil.elemaker( "option", this.sncut_dropdown, { "text": "All detections",
-                                                             "attributes": { "value": "zhist",
-                                                                             "selected": "selected" } } );
-        rkWebUtil.elemaker( "option", this.sncut_dropdown, { "text": "Highest S/N band S/N>5",
+        rkWebUtil.elemaker( "option", this.sncut_dropdown, { "text": "Cut used in Ia Cosmology",
+                                                             "attributes": { "value": "Iacosmocutzhist" } } );
+        rkWebUtil.elemaker( "option", this.sncut_dropdown, { "text": "Highest S/N band S/N≥10",
                                                              "attributes": { "value": "snrmaxzhist" } } );
-        rkWebUtil.elemaker( "option", this.sncut_dropdown, { "text": "2nd highest S/N color S/N>5",
+        rkWebUtil.elemaker( "option", this.sncut_dropdown, { "text": "S/N_max≥10, 2nd highest S/N color S/N≥5",
                                                              "attributes": { "value": "snrmax2zhist" } } );
-        rkWebUtil.elemaker( "option", this.sncut_dropdown, { "text": "3rd highest S/N color S/N>5",
-                                                             "attributes": { "value": "snrmax3zhist" } } );
+        rkWebUtil.elemaker( "option", this.sncut_dropdown, { "text": "S/N_max≥10, 2nd & 3rd highest S/N color S/N≥5",
+                                                             "attributes": { "value": "snrmax3zhist",
+                                                                             "selected": "selected" } } );
     }
 
     show_sim( sim )
@@ -589,7 +671,8 @@ snanasum.PhotSummary = class extends snanasum.InfoWindow
         let gentype = this.gentype_dropdown.value;
         let sncut = this.sncut_dropdown.value;
 
-        let imgurl = "/snzhist/" + this.collection.collection + "/" + sim
+        let imgurl = "/snzhist/" + this.collection.campaign.campaign + "/"
+            + this.collection.collection + "/" + sim
             + "/whichhist=" + sncut
             + "/gentype=" + gentype
             + "/tier=" + whichtier;
@@ -699,7 +782,7 @@ snanasum.PhotSummary = class extends snanasum.InfoWindow
         else if ( sncut == "snrmax3zhist" )
             var hist = this.collection.surveys[sim].snrmax3zhist;
         else {
-            window.alert( "Unknown sncut" + sncut );
+            window.alert( "Unknown sncut " + sncut );
             return;
         }
 
@@ -825,7 +908,8 @@ snanasum.LtcvPlot = class extends snanasum.InfoWindow
         let gentype = this.gentype_dropdown.value;
         let z = this.ltcv_z_wid.value;
         let tier = this.tier_dropdown.value;
-        let url = "/" + this.collection.collection + "/" + sim + "/" + gentype + "/" + z + "/0.1";
+        let url = "/" + this.collection.campaign.campaign + "/"
+            + this.collection.collection + "/" + sim + "/" + gentype + "/" + z + "/0.1";
         if ( tier != "__ALL__" ) url += "/" + tier;
         connector.sendHttpRequest( url, {}, (data) => { self.actually_plot_random_ltcv( data ) } );
     }
@@ -1070,22 +1154,26 @@ snanasum.SpecSummary = class extends snanasum.InfoWindow
     {
         if ( sim == null ) sim = this.collection.surveylist[0];
 
+        if ( ! this.collection.surveys[sim].hasOwnProperty( 'spechists' ) ) return;
+        
         let spechists = this.collection.surveys[sim]['spechists'];
 
         let curstrat = this.strat_dropdown.value;
         if ( ( curstrat == null ) || ( curstrat == undefined ) || ( curstrat == "" ) ) curstrat = 0;
-        if ( curstrat > spechists['spectrumhists'].length ) curstrat = 0;
-        rkWebUtil.wipeDiv( this.strat_dropdown );
-        for ( let i in spechists['spectrumhists'] ) {
-            let text = "";
-            for ( let tier in spechists['spectrumhists'][i] ) {
-                let texp = spechists['spectrumhists'][i][tier]['texpose'];
-                text += "t_exp(" + tier + ")=" + texp + " " ;
+        if ( spechists.hasOwnProperty( 'spectrumhists' ) ) {
+            if ( curstrat > spechists['spectrumhists'].length ) curstrat = 0;
+            rkWebUtil.wipeDiv( this.strat_dropdown );
+            for ( let i in spechists['spectrumhists'] ) {
+                let text = "";
+                for ( let tier in spechists['spectrumhists'][i] ) {
+                    let texp = spechists['spectrumhists'][i][tier]['texpose'];
+                    text += "t_exp(" + tier + ")=" + texp + " " ;
+                }
+                let option = rkWebUtil.elemaker( "option", this.strat_dropdown,
+                                                 { "text": text,
+                                                   "attributes": { "value": i } } );
+                if ( i == curstrat ) option.setAttribute( "selected", "selected" );
             }
-            let option = rkWebUtil.elemaker( "option", this.strat_dropdown,
-                                             { "text": text,
-                                               "attributes": { "value": i } } );
-            if ( i == curstrat ) option.setAttribute( "selected", "selected" );
         }
     }
 
@@ -1099,8 +1187,11 @@ snanasum.SpecSummary = class extends snanasum.InfoWindow
         let curstrat = this.strat_dropdown.value;
 
         if ( sim == null ) sim = this.collection.surveylist[0];
+
         let spechists = this.collection.surveys[sim]['spechists'];
 
+        if ( ! spechists.hasOwnProperty( 'spectrumhists' ) ) return;
+        
         let tier = Object.keys(spechists['spectrumhists'][curstrat])[0];
 
         let curband = this.band_dropdown.value;
@@ -1192,7 +1283,8 @@ snanasum.SpecSummary = class extends snanasum.InfoWindow
         let snrbin = this.snr_dropdown.value;
         let gentype = this.gentype_dropdown.value;
 
-        let imgurl = ( "/spechist/" + which + "/" + this.collection.collection + "/"
+        let imgurl = ( "/spechist/" + which + "/" + this.collection.campaign.campaign + "/"
+                       + this.collection.collection + "/"
                        + this.shown_sim + "/" + curstrat
                        + "/tier=__ALL__/zbin=" + zbin + "/tbin=" + tbin
                        + "/magbin=" + mbin + "/snrbin=" + snrbin + "/band=" + curband
@@ -1296,8 +1388,9 @@ snanasum.SpecPlot = class extends snanasum.InfoWindow
         let tier = this.tier_dropdown.value;
         let specstrat = this.specstrat_dropdown.value;
 
-        let url = "/" + this.collection.collection + "/" + sim + "/" + gentype + "/" + z + "/0.1" +
-            "/" + t + "/5/tframe=" + tframe;
+        let url = "/" + this.collection.campaign.campaign + "/"
+            + this.collection.collection + "/" + sim + "/" + gentype + "/" + z + "/0.1"
+            + "/" + t + "/5/tframe=" + tframe;
         if ( tier != "__ALL__" ) url += "/tier=" + tier;
         if ( specstrat != "__ALL__" ) url += "/specstrat=" + specstrat;
 
