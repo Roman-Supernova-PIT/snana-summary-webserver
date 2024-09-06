@@ -50,8 +50,8 @@ spec:
         - mountPath: /snana_sim
           name: snana-summ-snana-sim
           readOnly: true
-        - mountPath: /snana_sim_base
-          name: snana-summ-snana-sim-base
+        - mountPath: /snana_pipeline_output
+          name: snana-summ-snana-pipeline-output
           readOnly: true
         # Comment this out to use the code baked into the Dockerfile
         - mountPath: /code
@@ -75,9 +75,9 @@ spec:
           type: Directory
         name: snana-summ-snana-sim
       - hostPath:
-          path: /global/cfs/cdirs/m4385/www/sims/
+          path: /global/cfs/cdirs/m4385/www/sims/RomanPIT_SNANA_pipeline_output
           type: Directory
-        name: snana-summ-snana-sim-base
+        name: snana-summ-snana-pipeline-output
       - hostPath:
           path: /global/cfs/cdirs/m4385/survey_strategy_optimization/code/snana-summary-dev-webserver
           type: Directory

@@ -77,12 +77,22 @@ class MainPage(BaseView):
 
 class Campaigns(BaseView):
     def dispatch_request( self ):
-        return { 'status': 'ok',
-                 'campaigns':
-                 { '2024-06-25_x536': '(todo)',
-                   '2024-07-09_x54_3SNrates': '(todo)'
-                  }
-                }
+        with open( "/snana_pipeline_output/SUMMARY.YAML" ) as ifp:
+            campaign_info = yaml.safe_load( ifp.read() )
+
+        campaign_info = { k: v for k, v in campaign_info.items() if v['show_to_world'] }
+
+        for camp, info in campaign_info.items():
+            if 'summary' not in info.keys():
+                info['summary'] = ""
+            if 'update' not in info.keys():
+                info['update'] = ""
+            if 'common_cuts' not in info.keys():
+                info['common_cuts'] = ""
+            if 'muopt' not in info.keys():
+                info['muopt'] = {}
+
+        return { 'status': 'ok', 'campaigns': campaign_info }
 
 # ======================================================================
 
@@ -91,6 +101,7 @@ class Collections(BaseView):
         app.logger.info( f"Looking in /data/{campaign} for *surveys.json" )
         d = pathlib.Path( f"/data/{campaign}" )
         jsonlist = list( d.glob( '*surveys.json' ) )
+        app.logger.info( f"Found {len(jsonlist)}" )
         jsonlist = [ str(i.name).replace( '_surveys.json', '' ) for i in jsonlist ]
         jsonlist.sort()
         return { 'status': 'ok',

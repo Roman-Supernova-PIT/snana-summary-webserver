@@ -1,3 +1,6 @@
+# Note that enough things have changed that there is zero hope of this working
+# with anything earlier than 2024-07-11
+
 import sys
 import os
 import io
@@ -54,7 +57,7 @@ class RomanSurveySummary:
 
         The directory is expected to have a single file named INP* as a yaml file.
 
-        Returns surveyinfo, instrinfo, analysisinfo, tiers, filemap
+        Returns surveyinfo, instrinfo, analysisinfo, tiers, filemap, texpose_prism
 
         surveyinfo is a dict with the CONFIG_SURVEY dictionary from the INP* file
            * FORCE_SNRMAX is converted from an array of strings (each
@@ -64,29 +67,35 @@ class RomanSurveySummary:
            * MJD_SEASONS is converted from an array of strings to an array of dicts
                { 'season_mjd0': <float>, 'season_mjd1': <float> }
 
+           * It has an additional key, TEXPOSE_PRISM, which has a dict
+             of tier: list, where tier is a tier name and list is a list
+             of prism exposure times.  All of these lists should have
+             the same length.  The simulations run multiple different
+             prism exposure times for each set of photometric surveys,
+             so really they're different surveys, but I need to make
+             better documentation so later I will remember what the heck
+             I was thinking when I was writing this paragraph.
+
         instrinfo is a dict with the yaml read from the file whose path
            is given by the CONFIG_INSTRUMENT_FILE field of the INP* file
 
-        analysisinfo is a dict with the CONFIG_ANALYSIS_PREP dictionary from the INP* file
-           * field 'muopt' is a list dicts containing mu options; it always starts with
-                  { 'name': 'standard', 'idsurvey_select': -99 }
-                  (This is not explicitly in the INP file, but is implied.)
-             additional lines are parsed from the analysisinfo['BBC']['MUOPT'], if that key exists
-
+        analysisinfo is a dict with the CONFIG_ANALYSIS_PREP dictionary from the INP* file.  Ignore most of it.
            * prescales is a dictionary of { type:str : prescale:float }
              - It is parsed from analysisinfo['SIM']['PRESCALE_TRANSIENT_LSIT']
              - HACK ALERT : analysinsof['prescales']'IIP+IIL' is added to have the same value as ...['IIL']
 
-        tiers is a list of dicts, parsed out of surveyinfo['TIERS']; each element of the list has:
-              { 'name': <str>, 'ra': <float>, 'dec': <float>, 'bands': <list of str>,
-                'relarea': <list of int>, 'dt_visit': <list of float>, 'z_snrmatch': <list of float> }
-          the length of the lists can be different; the three lists define a 3d matrix of sims to run.
+        tiers is a list of tier names
 
         filemap is a pandas dataframe parsed from the csv file
            ANALSYS_INSTRUCTIONS.README in the same directory.  Each row
            in that file has the version name, the simlib file, and the
            three indices into area, t_exp, and z_snrmax.  filemap is a
            pandas dataframe with keys i_AREA, i_TEXPOSE, and i_zSNRMAX.
+
+        texpose_prism is a dictionariy of { tier: [ texp, texp, ... ] }
+           There should be a key for each tier in the "tiers" return thingy.
+           The value is a list of prism exposure times.  Each list should
+           have the same length
 
         """
 
@@ -159,17 +168,6 @@ class RomanSurveySummary:
                                  r'(?P<bands>\S+)\s+\[\s*(?P<relarea>[^\]]+)\s*\]\s*'
                                  r'\[\s*(?P<dt_visit>[^\]]+)\s*\]\s+\[\s*(?P<z_snrmatch>[^\]]+)\s*\]' )
         tiers = []
-        
-        texpose_prism = {}
-        if 'TEXPOSE_PRISM' in surveyinfo.keys():
-            for line in surveyinfo['TEXPOSE_PRISM']:
-                match = re.search( '^\s*(?P<tier>[^\s]+)\s*\[(?P<texplist>[^\]]+)\]', line )
-                if match is None:
-                    s = f"Failed to parse TEXPOSE_PRISIM line {line}"
-                    _logger.error( s )
-                    raise ValueError( s )
-                texpose_prism[ match.group('tier') ] =  [ int(i) for i in
-                                                          re.split( '\s*,\s*', match.group('texplist') ) ]
 
         for line in surveyinfo['TIERS']:
             match = parse_tier.search( line )
@@ -195,22 +193,37 @@ class RomanSurveySummary:
             # if tiername in texpose_prism.keys():
             #     tiers[-1]['texpose_prism'] = texpose_prism[tiername]
 
-        analysisinfo[ 'muopt' ] = [  { 'name': 'standard', 'idsurvey_select': -99 } ]
-        muparse = re.compile( r'^\s*(?P<muname>.*)\s+idsurvey_select=(?P<surveyid>\d+)' )
-        hackremovethismuparse = re.compile( '^\s*idsurvey_select=(?P<surveyid>\d+)' )
-        if 'MUOPT' in analysisinfo['BBC'].keys():
-            for i, line in enumerate( analysisinfo['BBC']['MUOPT'] ):
-                match = muparse.search( line )
-                if match is None:
-                    match = hackremovethismuparse.search( line )
-                    muname = '(unnamed)'
-                    if match is None:
-                        raise ValueError( f"Failed to parse BBC.MUOPT line {line}" )
-                else:
-                    muname = match.group('muname')
-                analysisinfo['muopt'].append( { 'name': muname,
-                                                'idsurvey_select': int( match.group('surveyid') ) } )
+        # Something changed sometime, and I have no idea WTF to do with muopt now, so
+        #   I'm hoping I don't really need it.
+        # analysisinfo[ 'muopt' ] = [  { 'name': 'standard', 'idsurvey_select': -99 } ]
+        # muparse = re.compile( r'^\s*(?P<muname>.*)\s+idsurvey_select=(?P<surveyid>\d+)' )
+        # hackremovethismuparse = re.compile( '^\s*idsurvey_select=(?P<surveyid>\d+)' )
+        # if 'MUOPT' in analysisinfo['BBC'].keys():
+        #     for i, line in enumerate( analysisinfo['BBC']['MUOPT'] ):
+        #         match = muparse.search( line )
+        #         if match is None:
+        #             match = hackremovethismuparse.search( line )
+        #             muname = '(unnamed)'
+        #             if match is None:
+        #                 raise ValueError( f"Failed to parse BBC.MUOPT line {line}" )
+        #         else:
+        #             muname = match.group('muname')
+        #         analysisinfo['muopt'].append( { 'name': muname,
+        #                                         'idsurvey_select': int( match.group('surveyid') ) } )
 
+
+        texpose_prism = {}
+        if 'TEXPOSE_PRISM' in surveyinfo.keys():
+            for line in surveyinfo['TEXPOSE_PRISM']:
+                match = re.search( '^\s*(?P<tier>[^\s]+)\s*\[(?P<texplist>[^\]]+)\]', line )
+                if match is None:
+                    s = f"Failed to parse TEXPOSE_PRISIM line {line}"
+                    _logger.error( s )
+                    raise ValueError( s )
+                texpose_prism[ match.group('tier') ] =  [ int(i) for i in
+                                                          re.split( '\s*,\s*', match.group('texplist') ) ]
+
+        surveyinfo['TEXPOSE_PRISM'] = texpose_prism
 
         # Parse the prescale transient list
 
@@ -247,7 +260,7 @@ class RomanSurveySummary:
             lines.append( line )
         ifp.close()
         simlib_doc_yaml = yaml.safe_load( '\n'.join( lines ) )['DOCUMENTATION']
-        
+
         # Parse out the tier info; assume everything else
         #   matches what we got from the INP file before
 
@@ -256,7 +269,7 @@ class RomanSurveySummary:
             tier = tierinfo['NAME']
             del tierinfo['NAME']
             surveyinfo['tiers'][tier] = tierinfo
-            
+
         return surveyinfo
 
     def _gen_zhists( self, dumpfilepath, gentypemap, prescales ):
@@ -306,12 +319,12 @@ class RomanSurveySummary:
                     snrmaxhist['zCMB'].append( zlow )
                     snrmax2hist['zCMB'].append( zlow )
                     snrmax3hist['zCMB'].append( zlow )
-                    detectedzhist['n'].append( precsle * len( gentypesne ) )
+                    detectedzhist['n'].append( prescale * len( gentypesne ) )
                     snrmaxhist['n'].append( prescale * len( gentypesne[ gentypesne['SNRMAX'] > self.snrmaxcut1 ] ) )
-                    snrmax2hist['n'].append( prescale * len( gentypesne[ ( gentypesne['SNRMAX1'] > self.snrmaxcut1 ) &
+                    snrmax2hist['n'].append( prescale * len( gentypesne[ ( gentypesne['SNRMAX'] > self.snrmaxcut1 ) &
                                                                          ( gentypesne['SNRMAX2'] > self.snrmaxcut23 )
                                                                         ] ) )
-                    snrmax3hist['n'].append( prescale * len( gentypesne[ ( gentypesne['SNRMAX1'] > self.snrmaxcut1 ) &
+                    snrmax3hist['n'].append( prescale * len( gentypesne[ ( gentypesne['SNRMAX'] > self.snrmaxcut1 ) &
                                                                          ( gentypesne['SNRMAX2'] > self.snrmaxcut23 ) &
                                                                          ( gentypesne['SNRMAX3'] > self.snrmaxcut23 )
                                                                         ] ) )
@@ -383,7 +396,7 @@ class RomanSurveySummary:
         return gentypemap, detectedzhist, snrmaxzhist, snrmax2zhist, snrmax3zhist
 
 
-    def _read_spec( self, collection, survey_version, tiers ):
+    def _read_spec( self, collection, survey_version, texpose_prism ):
         """Read spectrum information.
 
         Returns two dictionaries: spechists, spectiercids
@@ -480,18 +493,17 @@ class RomanSurveySummary:
                 }
 
         spectiers = specdf['FIELD'].unique()
-        if set( spectiers ) != set( [ t['name'] for t in tiers ] ):
+        if set( spectiers ) != set( texpose_prism.keys() ):
             _logger.error( f"Spectroscopic tiers {spectiers} don't match photometric {tiers.keys()}" )
         ntexpose = -99
-        for info in tiers:
-            tier = info['name']
-            if not isinstance( info['texpose_prism'], list ):
+        for tier, prismexplist in texpose_prism.items():
+            if not isinstance( prismexplist, list ):
                 _logger.error( f"texpose_prism not a list for tier {tier}!  Not returning spectrum info." )
                 raise RuntimeError( f"texpose_prism not a list for tier {tier}!" )
                 # return {}
             if ntexpose < 0:
-                ntexpose = len( info['texpose_prism'] )
-            elif len( info['texpose_prism'] ) != ntexpose:
+                ntexpose = len( prismexplist )
+            elif len( prismexplist ) != ntexpose:
                 raise RuntimeError( f"Inconsistent numbers texpose_prism for {collection} {survey_version}" )
 
         hist[ 'nspecstrategies' ] = ntexpose
@@ -502,19 +514,19 @@ class RomanSurveySummary:
 
             for tier in specdf['FIELD'].unique():
                 _logger.debug( f"Spectrum strategy {strati}, tier {tier}" )
-                tiersentry = None
-                for ent in tiers:
-                    if ent['name'] == tier:
-                        tiersentry = ent
-                        break
-                else:
+                prismexplist = None
+                for texpose_prism_tier, texpose_prism_explist in texpose_prism.items():
+                    if texpose_prism_tier == tier:
+                        prismexplist = texpose_prism_explist
+                if prismexplist is None:
                     raise RuntimeError( f"Tier {tier} in specdf is not in tiers." )
+                _logger.debug( f"For tier {tier}, texpose_prism = {prismexplist}" )
 
                 stratdict[tier] = {}
-                stratdict[tier]['texpose'] = tiersentry['texpose_prism'][strati]
+                stratdict[tier]['texpose'] = prismexplist[strati]
 
                 tierdf = specdf[ ( specdf['FIELD'] == tier )
-                                 & ( specdf['TEXPOSE'] == tiersentry['texpose_prism'][strati] )
+                                 & ( specdf['TEXPOSE'] == prismexplist[strati] )
                                 ].copy()
 
                 tierdf['zbin'] = ( ( tierdf['zHEL'] - zmin ) / deltaz ).apply( int )
@@ -551,14 +563,9 @@ class RomanSurveySummary:
 
         spectiercids = {}
         for tier in specdf['FIELD'].unique():
-            tiersentry = None
-            for ent in tiers:
-                if ent['name'] == tier:
-                    tiersentry = ent
-                    break
-            else:
-                # This should never happen; exception would have been raised before.
-                raise RuntimeError( f"Tier {tier} in specdf is not in tiers." )
+            if tier not in texpose_prism.keys():
+                raise RuntimeError( f"Didn't find {tier} in texpose_prism" )
+            tiersentry = texpose_prism[tier]
 
             spectiercids[ tier ] = []
             for i, specstrat in enumerate( range(ntexpose) ):
@@ -566,7 +573,7 @@ class RomanSurveySummary:
                 #   However, I expect these floating point numbers to all be integers,
                 #   and 32-bit floats can perfectly represent integers up to 2^23-1,
                 #   or 8388607, and no exposure time will ever be that long.
-                texpose = tiersentry['texpose_prism'][i]
+                texpose = tiersentry[i]
                 # Explicitly convert to int just in case it's a string,
                 #   which I've seen for ids in SNANA sometimes
                 try:
@@ -631,10 +638,9 @@ class RomanSurveySummary:
                                 'FoM': [ { 'muopt_dex': int, 'muopt': str, 'FoM_stat': float }, ... ]
              'tiers': list of tier names,
              'instrinfo': dict of stuff,
-             'analysisinfo': dict with a bunch of keys including
-                           'muopt': [ { 'name': str, 'idsurvey_select': int } ]
+             'analysisinfo': dict with a bunch of keys
              'surveys': { name : { 'tiers': { tier: { 'BANDS': { band: t_expose, band: t_expose, ... },
-                                                      'BANDS_BY_FISIT: list [SEE BELOW],
+                                                      'BANDS_BY_VISIT: list [SEE BELOW],
                                                       'T_EXPOSE': list [SEE BELOW],
                                                       'NTILE': int,
                                                       'NVISIT': int,
@@ -652,9 +658,12 @@ class RomanSurveySummary:
                                    'spechists': { <see _read_spec> },
                                    'gentypemap' : { gentype: name, ... },
                                    'long_survey_version' : <str>,
-                                   'muopt': [ { 'name': str,
+                                   'cosmo': [ { 'fitopt': int,
+                                                'muopt': int,
+                                                'name': str,
                                                 'idsurvey_select': int,
-                                                 (bunch of cosmology keys, including 'FoM_stat') }
+                                                 (bunch of cosmology keys, including 'FoM_stat')
+                                              }
                                             ]
 
                          } },
@@ -677,25 +686,28 @@ class RomanSurveySummary:
 
         # Make sure an assumption I'm going to make is true, that the
         # number of areas, dt_visits, and zSNRMATCHes are the same for all tiers.
+        # ...can't do this any more, because I on longer read this information
+        # from the INP file.  Just hope that things will work later, and when they
+        # don't, plan on weeping then.
 
-        surveyparamlens = {
-            'relarea': None,
-            'dt_visit': None,
-            'z_snrmatch': None }
-        for tier in tiers:
-            for var in surveyparamlens.keys():
-                if surveyparamlens[var] is None:
-                    surveyparamlens[var] = len( tier[var] )
-                elif surveyparamlens[var] != len( tier[var] ):
-                    raise ValueError( f"The number of {var} is not the same for all tiers." )
+        # surveyparamlens = {
+        #     'relarea': None,
+        #     'dt_visit': None,
+        #     'z_snrmatch': None }
+        # for tier in tiers:
+        #     for var in surveyparamlens.keys():
+        #         if surveyparamlens[var] is None:
+        #             surveyparamlens[var] = len( tier[var] )
+        #         elif surveyparamlens[var] != len( tier[var] ):
+        #             raise ValueError( f"The number of {var} is not the same for all tiers." )
 
         # Start building the individual surveys
 
         surveys = {}
         spectiercids = {}
-        for ai, relarea in enumerate( tiers[0]['relarea'] ):
-            for ti, dt_visit in enumerate( tiers[0]['dt_visit'] ):
-                for zi, z_snrmatch in enumerate( tiers[0]['z_snrmatch'] ):
+        for ai in filemap.index.get_level_values('i_AREA').unique():
+            for ti in filemap.index.get_level_values('i_TEXPOSE').unique():
+                for zi in filemap.index.get_level_values('i_zSNRMAX').unique():
                     subdf = filemap.xs( ( ai, ti, zi ), level=( 'i_AREA', 'i_TEXPOSE', 'i_zSNRMAX' ) )
                     if len(subdf) != 1:
                         _logger.error( "Bad things have happened." )
@@ -723,7 +735,8 @@ class RomanSurveySummary:
                         surveys[short_survey_version]['snrmax2zhist'] = snrmax2zhist
                         surveys[short_survey_version]['snrmax3zhist'] = snrmax3zhist
                         surveys[short_survey_version]['long_survey_version'] = survey_version
-                        spechists, this_spectiercids = self._read_spec( collection, survey_version, tiers )
+                        spechists, this_spectiercids = self._read_spec( collection, survey_version,
+                                                                        surveyinfo['TEXPOSE_PRISM'] )
                         surveys[short_survey_version]['spechists'] = spechists
                         spectiercids[short_survey_version] = this_spectiercids
                     except Exception as ex:
@@ -748,10 +761,15 @@ class RomanSurveySummary:
         if bbcsummary['FITOPT'].unique()[0] != 0:
             raise ValueError( f"Assumption failure: FITOPT is not 0" )
 
-        muopts = list( bbcsummary['MUOPT'].unique() )
-        muopts.sort()
-        if ( muopts != [ i for i in range(len(analysisinfo['muopt'])) ] ):
-            raise ValueError( f"muopts in bbcsummary for {sndatabasename} not what was expected!" )
+        # FIGURE OUT HOW TO DEAL WITH muopts
+        # It's all very complicated.  For now, I'm going to go with
+        # muopt=0 is "the one peopel should see" and ignore all the
+        # others.
+        muopts = [ 0 ]
+        # muopts = list( bbcsummary['MUOPT'].unique() )
+        # muopts.sort()
+        # if ( muopts != [ i for i in range(len(analysisinfo['muopt'])) ] ):
+        #     raise ValueError( f"muopts in bbcsummary for {sndatabasename} not what was expected!" )
 
         for skey, sval in surveys.items():
             survey = sval['long_survey_version']
@@ -825,7 +843,7 @@ def main():
                          help="Always regen; if not given, then will read cache files from a previous run" )
     parser.add_argument( "--no-save", action='store_true', default=False,
                          help="Don't actually save anything.  This is useless." )
-    
+
     args = parser.parse_args()
 
     if args.verbose:

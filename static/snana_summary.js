@@ -103,12 +103,12 @@ snanasum.Context = class
         this.campaignwidget.addEventListener( "change", function() {
             let col = self.campaignwidget.value;
             if ( ! self.campaigndivs.hasOwnProperty( col ) ) {
-                self.campaigndivs[col] = new snanasum.Campaign( col, self.campaigndiv );
+                self.campaigndivs[col] = new snanasum.Campaign( col, self.campaings[col], self.campaigndiv );
             }
             self.campaigndivs[col].renderpage();
         } );
 
-        this.campaigndivs[col] = new snanasum.Campaign( col, this.campaigndiv );
+        this.campaigndivs[col] = new snanasum.Campaign( col, this.campaigns[col], this.campaigndiv );
         this.campaigndivs[col].renderpage();
     }
 }
@@ -118,10 +118,11 @@ snanasum.Context = class
 // **********************************************************************
 
 snanasum.Campaign = class {
-    constructor( campaign, maindiv )
+    constructor( campaign, info, maindiv )
     {
         this.maindiv = maindiv;
         this.campaign = campaign;
+        this.info = info;
         this.collectionlist = null;
         this.collectiondivs = {};
         this.shown_collection = null;
@@ -142,7 +143,7 @@ snanasum.Campaign = class {
             this.actually_renderpage();
         }
     }
-    
+
     parse_collections_and_render( data )
     {
         rkWebUtil.wipeDiv( this.maindiv );
@@ -161,10 +162,44 @@ snanasum.Campaign = class {
     actually_renderpage( data )
     {
         var self = this
-        var h2, h3;
+        var h2, h3, infodiv, button, div, pre, ul, p;
 
-        h2 = rkWebUtil.elemaker( "h2", this.maindiv, { "text": "Collections for campaign " + this.campaign } );
-        
+        h2 = rkWebUtil.elemaker( "h2", this.maindiv, { "text": "Campaign " + this.campaign } );
+
+        p = rkWebUtil.elemaker( "p", this.maindiv );
+        button = rkWebUtil.button( p, "Show" );
+        p.appendChild( document.createTextNode( " campaign info" ) );
+        infodiv = rkWebUtil.elemaker( "div", this.maindiv, { "classes": [ "displaynone" ] } );
+        button.addEventListener( "click", () => {
+            if ( button.value == "Show" ) {
+                button.value = "Hide";
+                infodiv.classList.remove( "displaynone" );
+                infodiv.classList.add( "displayblock" );
+            } else {
+                button.value = "Show";
+                infodiv.classList.remove( "displayblock" );
+                infodiv.classList.add( "displaynone" );
+            }
+        } );
+
+        rkWebUtil.elemaker( "p", infodiv, { "text": "Summary:" } );
+        div = rkWebUtil.elemaker( "div", infodiv, { "classes": [ "fadebgborder" ] } );
+        rkWebUtil.elemaker( "pre", div, { "text": this.info.summary } );
+        rkWebUtil.elemaker( "p", infodiv, { "text": "Update:" } );
+        div = rkWebUtil.elemaker( "div", infodiv, { "classes": [ "fadebgborder" ] } );
+        rkWebUtil.elemaker( "pre", div, { "text": this.info.udpate } );
+        rkWebUtil.elemaker( "p", infodiv, { "text": "Common Cuts:" } );
+        div = rkWebUtil.elemaker( "div", infodiv, { "classes": [ "fadebgborder" ] } );
+        rkWebUtil.elemaker( "pre", div, { "text": this.info.common_cuts } );
+        rkWebUtil.elemaker( "p", infodiv, { "text": "muopt:" } );
+        div = rkWebUtil.elemaker( "div", infodiv, { "classes": [ "fadebgborder" ] } );
+        ul = rkWebUtil.elemaker( "ul", div );
+        for ( let muopt in this.info.muopt ) {
+            let li = rkWebUtil.elemaker( "li", ul );
+            rkWebUtil.elemaker( "b", li, { "text": muopt } );
+            li.appendChild( document.createTextNode( " : " + this.info.muopt[muopt] ) );
+        }
+
         h3 = rkWebUtil.elemaker( "h3", this.maindiv, { "text": "Show simulation collection: " } );
         this.collectionwidget = rkWebUtil.elemaker( "select", h3 );
         let col = null;
@@ -255,8 +290,8 @@ snanasum.Collection = class {
     get_filter_str( sim, tier )
     {
         let filters = [];
-        for ( let filt of Object.keys( this.surveys[sim]['tiers'][tier]['bands'] ) ) {
-            if ( this.surveys[sim]['tiers'][tier]['bands'][filt] > 0 ) {
+        for ( let filt of Object.keys( this.surveys[sim]['tiers'][tier]['BANDS'] ) ) {
+            if ( this.surveys[sim]['tiers'][tier]['BANDS'][filt] > 0 ) {
                 filters.push( filt );
             }
         }
@@ -302,7 +337,7 @@ snanasum.Collection = class {
             this.sorttier = Object.keys( this.surveys[firstsurvey].tiers )[0]
         }
 
-        let sortables = [ 'FoM_stat', 'filters', 'area', 'nvisit', 'ntile', 'dt_visit', 'zSNRMATCH' ]
+        let sortables = [ 'FoM_stat', 'filters', 'AREA', 'NVISIT', 'NTILE', 'DT_VISIT', 'zSNRMATCH' ]
 
         p = rkWebUtil.elemaker( "p", this.tabdiv, { "text": "Sort rows based on values for: " } );
         this.which_tier_sort = rkWebUtil.elemaker( "select", p );
@@ -341,6 +376,10 @@ snanasum.Collection = class {
                                                                  }
                                                              } } );
         p.appendChild( document.createTextNode( " detail columns" ) );
+
+        rkWebUtil.elemaker( "p", this.tabdiv,
+                            { "text": "NOTE: For \"SPECIAL\" collections, there is an interleaved cadence " +
+                              "in the SHALLOW tier.  R is observed every dt, the others are observed every 2*dt" } );
 
         this.sim_table = rkWebUtil.elemaker( "table", this.tabdiv );
 
@@ -489,13 +528,17 @@ snanasum.Collection = class {
 
                 td = rkWebUtil.elemaker( "td", tr, { "text": this.get_filter_str( sim, tier ) } );
                 this.simtable_hidecolumns.push( td );
-                td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].area.toFixed( 2 ) } );
+                td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].AREA.toFixed( 2 ) } );
                 this.simtable_hidecolumns.push( td );
-                td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].ntile } );
+                td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].NTILE } );
                 this.simtable_hidecolumns.push( td );
-                td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].nvisit } );
+                td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].NVISIT } );
                 this.simtable_hidecolumns.push( td );
-                td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].dt_visit } );
+                if ( survey.tiers[tier].BANDS_BY_VISIT.length > 1 ) {
+                    td = rkWebUtil.elemaker( "td", tr, { "text": String( survey.tiers[tier].DT_VISIT ) + "**" } );
+                } else {
+                    td = rkWebUtil.elemaker( "td", tr, { "text": survey.tiers[tier].DT_VISIT } );
+                }
                 this.simtable_hidecolumns.push( td );
 
             }
@@ -733,10 +776,10 @@ snanasum.PhotSummary = class extends snanasum.InfoWindow
         for ( let tier of Object.keys( this.collection.surveys[sim].tiers ) ) {
             let tierinfo = this.collection.surveys[sim].tiers[tier];
             td = rkWebUtil.elemaker( "th", trtiers, { "text": tier } );
-            td = rkWebUtil.elemaker( "td", trntile, { "text": tierinfo.ntile } );
-            td = rkWebUtil.elemaker( "td", trnvisit, { "text": tierinfo.nvisit } );
-            td = rkWebUtil.elemaker( "td", trdtvisit, { "text": tierinfo.dt_visit } );
-            td = rkWebUtil.elemaker( "td", trarea, { "text": tierinfo.area } );
+            td = rkWebUtil.elemaker( "td", trntile, { "text": tierinfo.NTILE } );
+            td = rkWebUtil.elemaker( "td", trnvisit, { "text": tierinfo.NVISIT } );
+            td = rkWebUtil.elemaker( "td", trdtvisit, { "text": tierinfo.DT_VISIT } );
+            td = rkWebUtil.elemaker( "td", trarea, { "text": tierinfo.AREA } );
             td = rkWebUtil.elemaker( "td", trzsn, { "text": tierinfo.zSNRMATCH } );
             td = rkWebUtil.elemaker( "td", tropenfrac, { "text": tierinfo.OpenFrac } );
             td = rkWebUtil.elemaker( "td", trfilters );
@@ -744,14 +787,14 @@ snanasum.PhotSummary = class extends snanasum.InfoWindow
             for ( let filt of snanasum.Context.filters ) {
                 tr = rkWebUtil.elemaker( "tr", subtable );
                 rkWebUtil.elemaker( "th", tr, { "text": filt } );
-                if ( tierinfo.bands.hasOwnProperty( filt ) && tierinfo.bands[filt] > 0 ) {
-                    rkWebUtil.elemaker( "td", tr, { "text": tierinfo.bands[filt] } );
+                if ( tierinfo.BANDS.hasOwnProperty( filt ) && tierinfo.BANDS[filt] > 0 ) {
+                    rkWebUtil.elemaker( "td", tr, { "text": tierinfo.BANDS[filt] } );
                 }
                 else {
                     rkWebUtil.elemaker( "td", tr, { "text": "—" } );
                 }
             }
-            
+
             // let filters = [];
             // for ( let filt of Object.keys( tierinfo.bands ) ) {
             //     if ( tierinfo.bands[filt] > 0 ) {
@@ -1155,7 +1198,7 @@ snanasum.SpecSummary = class extends snanasum.InfoWindow
         if ( sim == null ) sim = this.collection.surveylist[0];
 
         if ( ! this.collection.surveys[sim].hasOwnProperty( 'spechists' ) ) return;
-        
+
         let spechists = this.collection.surveys[sim]['spechists'];
 
         let curstrat = this.strat_dropdown.value;
@@ -1191,7 +1234,7 @@ snanasum.SpecSummary = class extends snanasum.InfoWindow
         let spechists = this.collection.surveys[sim]['spechists'];
 
         if ( ! spechists.hasOwnProperty( 'spectrumhists' ) ) return;
-        
+
         let tier = Object.keys(spechists['spectrumhists'][curstrat])[0];
 
         let curband = this.band_dropdown.value;

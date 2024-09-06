@@ -43,15 +43,20 @@ The base URL for the API is the same as for the interactive webserver: `https://
 
 ---
 
+### `/campaigns`
+
+This API endpoints returns a JSON blob with information about the campaigns.  You get back a dictionary with a single key 'campaigns'.  The value of that dictionary is itself a dictionary; the keys of the 'campaigns' dictionary are the names of the campaigns, and the values are yet another dictionary with information.  What's most important is the keys, as those are what you will use for further API calls.
+
 ### `/collections`
 
-This API endpoint just returns a JSON string with list of the collections that are available for the campaign that the web server is currently pointing at.  This will be a list of names like `2TIER_PRISM25_5bands`.  Don't try to algorithmically parse the names returned; just view them as opaque strings for getting further information.  (They may be shown to users though for humans to try to parse.)
+Hit this API with url `<baseurl>/collections/<string:campaign>`, where the campaign name can be found from the `/campaigns` API call above.  You will get back a dictionary with two keys; `campaign` repeats the name of the campaign that you asked for, and 'collections' is a list with the names of the collections.  The names will be things lik `2TIER_PRISM25_5bands`.  Don't try to algorithmically parse the names returned; just view them as opaque strings for getting further information.  (They may be shown to users though for humans to try to parse.)
 
 ---
 
 ### `/surveyinfo`
 
-Hit this API with the url `<baseurl>/surveyinfo/<string:collection>`, where the argument at the end is the collection you want to get information for.  So, for example, you might hit the url `https://roman-snpit-snana-strategy.lbl.gov/surveyinfo/2TIER_PRISM25_5bands`
+Hit this API with the url `<baseurl>/surveyinfo/<string:campaign>/<string:collection>`, where the arguments at the end are the campaign and collection you want to get information for.  So, for example, you might hit the url
+`https://roman-snpit-snana-strategy.lbl.gov/surveyinfo/2024-08-05_x108_3SNrates/2TIER_RATE1`
 
 This API returns a JSON dictionary with the following keys.  Many of these are internal SNANA variables and are not useful outside of SNANA.
 
@@ -87,7 +92,7 @@ The columns, left to right, are: tier name, ra, dec, bands used for that tier, l
 
 ### `/instrinfo`
 
-API url: `<baseurl>/instrinfo/<string:collection>` (see `/surveyinfo` above).
+API url: `<baseurl>/instrinfo/<string:campaign>/<string:collection>` (see `/surveyinfo` above).
 
 Returns a JSON-encoded dictionary with bunch of information about the simulated instrument that SNANA used.
 
@@ -95,7 +100,7 @@ Returns a JSON-encoded dictionary with bunch of information about the simulated 
 
 ### `/analysisinfo`
 
-API url: `<baseurl>/analysisinfo/<string:collection>` (see `/surveyinfo` above).
+API url: `<baseurl>/analysisinfo/<string:campaign>/<string:collection>` (see `/surveyinfo` above).
 
 A JSON-encoded dictionary with a bunch of parameters that defined what SNANA did.  Probably of most interest is the sub-dictionary found underneath the `prescales` key of this dictionary.  The keys of that sub-dictionary are object types that were in the simulation (e.g. `Ia`, `AGN`, `IIL`, etc.).  The values are the scaling that should be applied to numbers of objects produced by the sim.  So, for example, if `analysisinfo['prescales']['IIP']` is equal to 10.0, that means that the sim only produced lightcurves for 1/10 as many SNIIP supernovae as it simulated would exist.  As such, any counts of IIP supernovae produced by further endpoints below should be multiplied by 10.
 
@@ -103,7 +108,7 @@ A JSON-encoded dictionary with a bunch of parameters that defined what SNANA did
 
 ### `/tiers`
 
-API url: `<baseurl>/tiers/<string:collection>` (see `/surveyinfo` above).
+API url: `<baseurl>/tiers/<string:campaign>/<string:collection>` (see `/surveyinfo` above).
 
 A JSON-encoded list with information about the tiers from this collection.  The length of the list is the number of tiers; each element of the list is a dictionary with keys:
 
@@ -139,7 +144,7 @@ Each sim is further divided into three spectrum strategies, with given exposure 
 
 ### `/surveys`
 
-API url: `<baseurl>/surveys/<string:collection>` (see `/surveyinfo` above).
+API url: `<baseurl>/surveys/<string:campaign>/<string:collection>` (see `/surveyinfo` above).
 
 Returns a JSON-encoded dictionary with a lot of information about each collection.  The key is the name of the sim (where the API url comes from "survey"="sim"), and the value is another dictionary with a lot of information.  The name of the sim should probably not be algorithmically parsed, but it's always '{collection} a{ai}_t{ti}_z{zi}' where `ai`, `ti`, and `zi` are indexes into the arrays defined in `/tiers` above.
 
@@ -235,7 +240,7 @@ This one is giant.
 
 ### `/summarydata`
 
-API url: `<baseurl>/surveys/<string:collection>` (see `/surveyinfo` above).
+API url: `<baseurl>/surveys/<string:campaign>/<string:collection>` (see `/surveyinfo` above).
 
 This is a way to get all of the information returned by API endpoints above in one go.  It returns a JSON-encoded dict with keys:
 
@@ -251,7 +256,7 @@ This is a way to get all of the information returned by API endpoints above in o
 
 This one does not return a JSON array, but rather returns an SVG image with the requested histogram (plotted server-side using matplotlib).  All the data you need to plot these histograms yourself is already present in what you get back from `/surveys`.  This exists as a convenience (and so that I didn't have to bother plotting histograms in Javascript when writing the web ap).
 
-Hit this URL at `<baseurl>/snzhist/<string:collection>/<string:sim>`, with optionally additional arguments at the end of the URL.  Additional arguments are appended with `/key=value`.  Supported arguments are:
+Hit this URL at `<baseurl>/snzhist/<string:campaign>/<string:collection>/<string:sim>`, with optionally additional arguments at the end of the URL.  Additional arguments are appended with `/key=value`.  Supported arguments are:
 
 * `width`: target width of the image in pixels, default 600.  (You get an svg back, so you can display it higher than this and it will still look good, but this is for purposes of font sizes, etc.)
 * `heigh`: target height of the image in pixels, default 500.
@@ -279,8 +284,8 @@ Ask the server to return a random lightcurve.
 
 Hit this url at one of:
 
-* `<baseurl>/randomltcv/<string:collection>/<string:sim>/<string:gentype>/<float:z>/<float:dz>`
-* `<baseurl>/randomltcv/<string:collection>/<string:sim>/<string:gentype>/<float:z>/<float:dz>/<string:tier>`
+* `<baseurl>/randomltcv/<string:campaign>/<string:collection>/<string:sim>/<string:gentype>/<float:z>/<float:dz>`
+* `<baseurl>/randomltcv/<string:campaign>/<string:collection>/<string:sim>/<string:gentype>/<float:z>/<float:dz>/<string:tier>`
 
 It will return a randomly chosen object from the specified collection and sim, of the specified type, at the specified reshift within the specified redshift range.  If the `tier` argument is included, it will only choose from objects observed as part of that tier; otherwise, it will choose from all objects.
 
@@ -318,7 +323,7 @@ Ask the server to return a random spectrum.
 The URL to hit is
 
 ```
-<baseurl>/randomspectrum/<string:collection>/<string:sim>/<int:gentype>/<float:z>/<float:dz>/<float:t>/<float:dt>
+<baseurl>/randomspectrum/<string:campaign>/<string:collection>/<string:sim>/<int:gentype>/<float:z>/<float:dz>/<float:t>/<float:dt>
 ```
 
 with optional additional arguments appended at the end via a series of `/key=value`.

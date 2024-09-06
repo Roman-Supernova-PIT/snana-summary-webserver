@@ -134,3 +134,5 @@ img.zhist { width: 600;
             margin-right: auto;
           }
 
+div.fadebgborder { border: 2px solid var(--main-color);
+                   background: var(--lots-faded-color); }

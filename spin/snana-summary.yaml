@@ -45,14 +45,17 @@ spec:
         tty: true
         volumeMounts:
         - mountPath: /data
-          name: snana-summary-data
+          name: snana-summ-data
           readOnly: true
         - mountPath: /snana_sim
-          name: snana-summary-snana-sim
+          name: snana-summ-snana-sim
+          readOnly: true
+        - mountPath: /snana_pipeline_output
+          name: snana-summ-snana-pipeline-output
           readOnly: true
         # Comment this out to use the code baked into the Dockerfile
         - mountPath: /code
-          name: snana-summary-code
+          name: snana-summ-code
       dnsConfig: {}
       dnsPolicy: ClusterFirst
       restartPolicy: Always
@@ -64,17 +67,21 @@ spec:
         - name: registry-nersc
       volumes:
       - hostPath:
-          path: /global/cfs/cdirs/m4385/survey_strategy_optimization/snana_summary_webserver_data/current
+          path: /global/cfs/cdirs/m4385/survey_strategy_optimization/snana_summary_webserver_data
           type: Directory
-        name: snana-summary-data
+        name: snana-summ-data
       - hostPath:
-          path: /global/cfs/cdirs/m4385/survey_strategy_optimization/snana_summary_webserver_data/snana_sim
+          path: /global/cfs/cdirs/m4385/www/sims/RomanPIT-SNANA
           type: Directory
-        name: snana-summary-snana-sim
+        name: snana-summ-snana-sim
       - hostPath:
-          path: /global/cfs/cdirs/m4385/survey_strategy_optimization/code/snana-summary-webserver
+          path: /global/cfs/cdirs/m4385/www/sims/RomanPIT_SNANA_pipeline_output
           type: Directory
-        name: snana-summary-code
+        name: snana-summ-snana-pipeline-output
+      - hostPath:
+          path: /global/cfs/cdirs/m4385/survey_strategy_optimization/code/snana-summary-dev-webserver
+          type: Directory
+        name: snana-summ-code
 ---
 apiVersion: v1
 kind: Service
