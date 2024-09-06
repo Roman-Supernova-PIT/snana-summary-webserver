@@ -47,6 +47,8 @@ The base URL for the API is the same as for the interactive webserver: `https://
 
 This API endpoints returns a JSON blob with information about the campaigns.  You get back a dictionary with a single key 'campaigns'.  The value of that dictionary is itself a dictionary; the keys of the 'campaigns' dictionary are the names of the campaigns, and the values are yet another dictionary with information.  What's most important is the keys, as those are what you will use for further API calls.
 
+---
+
 ### `/collections`
 
 Hit this API with url `<baseurl>/collections/<string:campaign>`, where the campaign name can be found from the `/campaigns` API call above.  You will get back a dictionary with two keys; `campaign` repeats the name of the campaign that you asked for, and 'collections' is a list with the names of the collections.  The names will be things lik `2TIER_PRISM25_5bands`.  Don't try to algorithmically parse the names returned; just view them as opaque strings for getting further information.  (They may be shown to users though for humans to try to parse.)
