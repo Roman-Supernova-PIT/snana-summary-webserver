@@ -104,3 +104,42 @@ def plot_lc(photometric_data, band_name: str):
     plt.legend(title="Filter")
     plt.grid(True)
     plt.show()
+    
+def days_between_obs(phot_data, band_name=None):
+    """
+    Plot a histogram of the days between observations for a specific band or for all observations if no band is specified.
+
+    Parameters:
+        phot_data (pd.DataFrame): The photometric data containing "MJD" and "BAND" columns.
+        band_name (str, optional): The name of the band to filter the data (e.g., "Y", "J", etc.). If None, use all bands.
+
+    Returns:
+        None
+    """
+    # filter data for the specified band
+    phot_data["BAND"] = phot_data["BAND"].astype(str)
+    band_data = phot_data[phot_data["BAND"] == band_name]
+
+    if band_name:
+        band_data = phot_data[phot_data["BAND"] == band_name]
+        if band_data.empty:
+            print(f"No data available for band '{band_name}'.")
+            return
+    else:
+        band_data = phot_data
+
+    # ensure chronological order
+    band_data = band_data.sort_values(by="MJD")
+
+    # calculate differences in MJD only for this band
+    mjd_values = band_data["MJD"]
+    mjd_differences = mjd_values.diff().dropna()
+
+    # plot histogram
+    plt.figure(figsize=(10, 6))
+    plt.hist(mjd_differences, bins=100, color='blue', alpha=0.7, edgecolor='black')
+    plt.xlabel("Days Between Observations")
+    plt.ylabel("Frequency")
+    plt.title(f"Histogram of Days Between Observations{' for Band ' + band_name if band_name else ''}")
+    plt.grid(True)
+    plt.show()
