@@ -8,10 +8,10 @@ from get_fits import download_fits, get_hdu, get_data
 from pathlib import Path
 from roman_snana_api import Roman_SNANA_Summary
 
-def nest_df(phot_fit_path, head_fit_path):
+def nest_df(phot_fits_path, head_fits_path):
     # create dataframe for PHOT and HEAD .FITS
-    phot_df = df(fits.open(phot_fits_filepath))
-    head_df = df(fits.open(head_fits_filepath))
+    phot_df = df(fits.open(phot_fits_path))
+    head_df = df(fits.open(head_fits_path))
     
     nested_phot = []
 
@@ -73,7 +73,7 @@ def plot_lcs(photometric_data):
     # add labels, legend and title
     plt.xlabel("MJD")
     plt.ylabel("Flux")
-    plt.title("Light Curve by Filter for SNID: 105021")
+    plt.title("Light Curve by Filter")
     plt.legend(title="Filters")
     plt.grid(True)
     plt.show()
@@ -100,7 +100,7 @@ def plot_lc(photometric_data, band_name: str):
     # add labels, legend and title
     plt.xlabel("MJD")
     plt.ylabel("Flux")
-    plt.title("Light Curve for SNID: 105021")
+    plt.title("Light Curve for a Single Band")
     plt.legend(title="Filter")
     plt.grid(True)
     plt.show()
