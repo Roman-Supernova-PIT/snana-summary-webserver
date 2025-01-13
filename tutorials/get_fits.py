@@ -1,5 +1,7 @@
 import gzip
+import numpy as np
 import os
+import pandas as pd
 from pathlib import Path
 import shutil
 import requests
@@ -7,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 def download_fits(collection, index, fits_type, model):
     # define urls
-    general_directory = "https://portal.nersc.gov/cfs/m4385/sims/RomanPIT-SNANA/2024-06-04_x536/"
+    general_directory = "https://portal.nersc.gov/cfs/m4385/sims/RomanPIT-SNANA/2024-08-05_x108_3SNrates/"
     data_directory = f"{general_directory}ROMAN_{collection}_DATA-{index}/"
     
     # generate a list of urls to download FITS files
@@ -48,7 +50,7 @@ def generate_urls(data_directory, fits_type, model):
 def download_and_unzip(fits_file, path_to_index_dir, fits_type):
     fits_filename = fits_file.split("/")[-1]
     
-    # Define paths
+    # define paths
     if fits_type == "SPEC":
         fits_file_output_path = path_to_index_dir / fits_filename
     else:
@@ -60,16 +62,16 @@ def download_and_unzip(fits_file, path_to_index_dir, fits_type):
         print(f"{fits_filename} already exists.")
         return
     
-    # Download the file
+    # download the file
     response = requests.get(fits_file)
     response.raise_for_status()
     
-    # Save the file
+    # save the file
     temp_file_path = path_to_index_dir / fits_filename if fits_type == "SPEC" else path_to_index_dir / fits_gz_filename
     with open(temp_file_path, 'wb') as temp_file:
         temp_file.write(response.content)
     
-    # Unzip if necessary
+    # unzip if necessary
     if fits_type != "SPEC":
         unzip_gz(temp_file_path, fits_file_output_path)
         os.remove(temp_file_path)
@@ -79,3 +81,34 @@ def unzip_gz(fits_gz_filename, fits_file_output_path):
     with gzip.open(fits_gz_filename, 'rb') as f_in:
         with open(fits_file_output_path, 'wb') as f_out:
             shutil.copyfileobj(f_in, f_out)
+
+def get_hdu(hdul, name):
+    # define header
+    if name.lower() == "primary":
+        hdr = hdul[0].header
+    else:
+        hdr = hdul[1].header
+    
+    # create a list of keywords and values
+    keywords = list(hdr.keys())
+    values = list(hdr.values())
+    
+    # create a DataFrame object
+    df = pd.DataFrame({
+        'Keyword': keywords,
+        'Value': values
+    })
+    
+    return df
+
+def get_data(hdul):
+    # define data
+    data = hdul[1].data
+    
+    # create a list of keywords and values
+    keywords = list(hdul[1].data.columns.names)
+    
+    # create a DataFrame object
+    df = pd.DataFrame(data, columns=keywords)
+    
+    return df
